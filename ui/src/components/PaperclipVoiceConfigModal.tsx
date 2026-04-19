@@ -57,6 +57,8 @@ interface PaperclipVoiceConfigModalProps {
   onConfigured?: (credentials: StoredVoiceCredentials) => void;
   /** Callback when configuration is cleared */
   onCleared?: () => void;
+  /** Callback when user clicks "Start Session" after configuring */
+  onStartSession?: () => void;
 }
 
 const STORAGE_KEY = "paperclip-voice-config";
@@ -120,6 +122,7 @@ export function PaperclipVoiceConfigModal({
   onOpenChange,
   onConfigured,
   onCleared,
+  onStartSession,
 }: PaperclipVoiceConfigModalProps) {
   const [mode, setMode] = useState<ConfigMode>("hosted");
   const [hostedAppId, setHostedAppId] = useState("");
@@ -132,6 +135,14 @@ export function PaperclipVoiceConfigModal({
   const [successMessage, setSuccessMessage] = useState("");
   const [hasStoredConfig, setHasStoredConfig] = useState(false);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+
+  // Reset justSaved when modal opens/closes
+  useEffect(() => {
+    if (!open) {
+      setJustSaved(false);
+    }
+  }, [open]);
 
   // Load stored config on mount
   useEffect(() => {
@@ -178,18 +189,14 @@ export function PaperclipVoiceConfigModal({
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
       setHasStoredConfig(true);
-      setSuccessMessage("Configuration saved! Voice agent is now enabled.");
+      setJustSaved(true);
+      setSuccessMessage("Configuration saved! Click 'Start Session' to begin.");
       onConfigured?.(credentials);
-
-      // Close modal after a short delay
-      setTimeout(() => {
-        onOpenChange(false);
-      }, 1500);
     } catch (error) {
       setErrorMessage("Failed to save configuration. Storage may be disabled.");
       console.error("Error saving config:", error);
     }
-  }, [hostedAppId, onConfigured, onOpenChange]);
+  }, [hostedAppId, onConfigured]);
 
   const handleSaveSelfHosted = useCallback(() => {
     setErrorMessage("");
@@ -213,12 +220,9 @@ export function PaperclipVoiceConfigModal({
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
         setHasStoredConfig(true);
-        setSuccessMessage("Configuration saved! Voice agent is now enabled.");
+        setJustSaved(true);
+        setSuccessMessage("Configuration saved! Click 'Start Session' to begin.");
         onConfigured?.(credentials);
-
-        setTimeout(() => {
-          onOpenChange(false);
-        }, 1500);
       } catch (error) {
         setErrorMessage("Failed to save configuration. Storage may be disabled.");
         console.error("Error saving config:", error);
@@ -241,18 +245,15 @@ export function PaperclipVoiceConfigModal({
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
         setHasStoredConfig(true);
-        setSuccessMessage("Configuration saved! Voice agent is now enabled.");
+        setJustSaved(true);
+        setSuccessMessage("Configuration saved! Click 'Start Session' to begin.");
         onConfigured?.(credentials);
-
-        setTimeout(() => {
-          onOpenChange(false);
-        }, 1500);
       } catch (error) {
         setErrorMessage("Failed to save configuration. Storage may be disabled.");
         console.error("Error saving config:", error);
       }
     }
-  }, [selfHostedAppId, selfHostedUrl, selfHostedJwt, onConfigured, onOpenChange]);
+  }, [selfHostedAppId, selfHostedUrl, selfHostedJwt, onConfigured]);
 
   const handleClearConfig = useCallback(() => {
     try {
@@ -496,6 +497,20 @@ export function PaperclipVoiceConfigModal({
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             {successMessage}
           </div>
+        )}
+
+        {/* Start Session button - shown after saving credentials */}
+        {justSaved && (
+          <Button
+            onClick={() => {
+              onStartSession?.();
+              onOpenChange(false);
+            }}
+            className="w-full gap-2"
+          >
+            <Mic className="h-4 w-4" />
+            Start Session
+          </Button>
         )}
 
         <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">

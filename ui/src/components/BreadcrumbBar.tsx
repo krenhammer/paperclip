@@ -15,7 +15,7 @@ import {
 import { Fragment, useMemo } from "react";
 import { PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
 import { PluginLauncherOutlet, usePluginLaunchers } from "@/plugins/launchers";
-import { VowelMicrophoneButtonCompact } from "./VowelMicrophoneButton";
+import { PaperclipVoiceHeaderButton } from "./PaperclipVoiceHeaderButton";
 
 type GlobalToolbarContext = { companyId: string | null; companyPrefix: string | null };
 
@@ -23,15 +23,11 @@ function GlobalToolbarPlugins({ context }: { context: GlobalToolbarContext }) {
   const { slots } = usePluginSlots({ slotTypes: ["globalToolbarButton"], companyId: context.companyId });
   const { launchers } = usePluginLaunchers({ placementZones: ["globalToolbarButton"], companyId: context.companyId, enabled: !!context.companyId });
 
-  // Check if Vowel is configured (VITE_VOWEL_APP_ID is set)
-  const vowelConfigured = !!import.meta.env.VITE_VOWEL_APP_ID;
-
-  // If no plugins, launchers, or Vowel, return null
-  if (slots.length === 0 && launchers.length === 0 && !vowelConfigured) return null;
+  // If no plugins or launchers, return null (voice button always shows if configured)
+  if (slots.length === 0 && launchers.length === 0) return null;
 
   return (
     <div className="flex items-center gap-1 ml-auto shrink-0 pl-2">
-      {vowelConfigured && <VowelMicrophoneButtonCompact size="sm" />}
       <PluginSlotOutlet slotTypes={["globalToolbarButton"]} context={context} className="flex items-center gap-1" />
       <PluginLauncherOutlet placementZones={["globalToolbarButton"]} context={context} className="flex items-center gap-1" />
     </div>
@@ -53,6 +49,9 @@ export function BreadcrumbBar() {
 
   const globalToolbarSlots = <GlobalToolbarPlugins context={globalToolbarSlotContext} />;
 
+  // Voice button is always shown in the header (configures if no API key)
+  const voiceButton = <PaperclipVoiceHeaderButton />;
+
   if (isMobile && mobileToolbar) {
     return (
       <div className="border-b border-border px-2 h-12 shrink-0 flex items-center">
@@ -64,6 +63,7 @@ export function BreadcrumbBar() {
   if (breadcrumbs.length === 0) {
     return (
       <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end">
+        {voiceButton}
         {globalToolbarSlots}
       </div>
     );
@@ -91,6 +91,7 @@ export function BreadcrumbBar() {
             {breadcrumbs[0].label}
           </h1>
         </div>
+        {voiceButton}
         {globalToolbarSlots}
       </div>
     );
@@ -123,6 +124,7 @@ export function BreadcrumbBar() {
           </BreadcrumbList>
         </Breadcrumb>
       </div>
+      {voiceButton}
       {globalToolbarSlots}
     </div>
   );

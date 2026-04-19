@@ -33,6 +33,7 @@ import {
 import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { VowelMicrophoneButton } from "./VowelMicrophoneButton";
+import { getVowel } from "../vowel.client";
 
 function SortableCompanyItem({
   company,
@@ -239,10 +240,12 @@ export function CompanyRail() {
       {/* Separator before add button */}
       <div className="w-8 h-px bg-border mx-auto shrink-0" />
 
-      {/* Voice assistant button */}
-      <div className="flex items-center justify-center py-2 shrink-0">
-        <VowelMicrophoneButton size="sm" />
-      </div>
+      {/* Voice assistant button - only show when vowel client is initialized */}
+      {getVowel() && (
+        <div className="flex items-center justify-center py-2 shrink-0">
+          <VowelMicrophoneButton size="sm" />
+        </div>
+      )}
 
       {/* Add company button */}
       <div className="flex items-center justify-center py-2 shrink-0">

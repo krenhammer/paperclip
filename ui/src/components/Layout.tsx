@@ -28,6 +28,8 @@ import {
   initFromStoredConfig,
   getVoiceConfig,
   cleanupVoiceAgent,
+  getVowel,
+  subscribeToVowelChanges,
 } from "../vowel.client";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
@@ -438,41 +440,81 @@ export function Layout() {
 
 /**
  * Voice control FAB that shows either:
- * - VowelMicrophoneButton when env VITE_VOWEL_APP_ID is set
- * - PaperclipVoiceButton when no env config (allows localStorage-based config)
+ * - VowelMicrophoneButton when vowel client is initialized (env or localStorage)
+ * - PaperclipVoiceButton when config exists but client not yet ready
+ * - Nothing when no config exists
  */
 function VoiceControlFab() {
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [hasConfig, setHasConfig] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [vowelReady, setVowelReady] = useState(false);
 
-  // Check for existing config on mount and auto-initialize if found
+  // Check for existing config and initialize vowel client on mount
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Check for env-based config (always takes precedence)
+    // Check for env-based config
     const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
-    if (envAppId) {
-      setVoiceEnabled(true);
-      return;
-    }
-
     // Check for localStorage-based config
-    if (hasVoiceConfig()) {
+    const localConfig = hasVoiceConfig();
+    const configExists = !!envAppId || localConfig;
+    setHasConfig(configExists);
+
+    // Initialize vowel client if config exists but client not initialized
+    if (configExists && !getVowel()) {
       const config = getVoiceConfig();
       if (config) {
-        const success = initFromStoredConfig(config);
-        setVoiceEnabled(success);
+        console.log("🎤 VoiceControlFab: Initializing from stored config");
+        initFromStoredConfig(config);
+      } else if (envAppId) {
+        console.log("🎤 VoiceControlFab: Initializing from env config");
+        // For env-based config, we need to wait for the app to set it up
+        // The vowel.client should handle env-based init separately
       }
     }
+
+    // Check initial vowel state
+    setVowelReady(!!getVowel());
+    setIsInitialized(true);
+  }, []);
+
+  // Subscribe to vowel client changes to re-render when it becomes available
+  useEffect(() => {
+    const unsubscribe = subscribeToVowelChanges((client) => {
+      setVowelReady(!!client);
+    });
+    return unsubscribe;
   }, []);
 
   // Handle successful configuration from modal
   const handleConfigured = useCallback(() => {
-    setVoiceEnabled(true);
+    setHasConfig(true);
+    // Initialize from the newly saved config
+    const config = getVoiceConfig();
+    if (config) {
+      initFromStoredConfig(config);
+    }
+  }, []);
+
+  // Handle start session from modal (after configuring)
+  const handleStartSession = useCallback(() => {
+    let vowel = getVowel();
+    // Initialize if needed (e.g., right after saving credentials)
+    if (!vowel) {
+      const config = getVoiceConfig();
+      if (config) {
+        initFromStoredConfig(config);
+        vowel = getVowel();
+      }
+    }
+    if (vowel) {
+      vowel.startSession();
+    }
   }, []);
 
   // Handle config cleared from modal
   const handleCleared = useCallback(() => {
-    setVoiceEnabled(false);
+    setHasConfig(false);
     cleanupVoiceAgent();
   }, []);
 
@@ -480,17 +522,19 @@ function VoiceControlFab() {
   useEffect(() => {
     const handleStorageChange = (event: StorageEvent) => {
       if (event.key === "paperclip-voice-config") {
-        if (event.newValue) {
-          // Config was added/updated
+        const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
+        const localConfig = hasVoiceConfig();
+        const configExists = !!envAppId || localConfig;
+        setHasConfig(configExists);
+
+        if (!event.newValue) {
+          cleanupVoiceAgent();
+        } else if (configExists && !getVowel()) {
+          // New config added from another tab - initialize it
           const config = getVoiceConfig();
           if (config) {
-            const success = initFromStoredConfig(config);
-            setVoiceEnabled(success);
+            initFromStoredConfig(config);
           }
-        } else {
-          // Config was removed
-          setVoiceEnabled(false);
-          cleanupVoiceAgent();
         }
       }
     };
@@ -499,24 +543,26 @@ function VoiceControlFab() {
     return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
-  // Env-based config takes precedence
   const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
+
+  // Don't show until we've checked for config
+  if (!isInitialized) {
+    return null;
+  }
 
   // Don't show anything on mobile (handled by MobileBottomNav if needed)
   return (
     <div className="fixed bottom-6 right-6 z-50 hidden md:block">
-      {envAppId ? (
-        // Env-based config: show microphone button directly
-        <VowelMicrophoneButton size="lg" showStatus={false} />
-      ) : voiceEnabled ? (
-        // LocalStorage config active: show microphone button
+      {hasConfig || envAppId ? (
+        // Config exists: show microphone button that toggles voice session
         <VowelMicrophoneButton size="lg" showStatus={false} />
       ) : (
-        // No config: show configure button
+        // No config: show configure button that opens config modal
         <PaperclipVoiceButton
           size="lg"
           onConfigured={handleConfigured}
           onCleared={handleCleared}
+          onStartSession={handleStartSession}
         />
       )}
     </div>

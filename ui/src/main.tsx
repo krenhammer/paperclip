@@ -81,30 +81,30 @@ function VowelRouterSync() {
 /**
  * Main app content with Vowel provider.
  * Shows loading state until Vowel client is ready.
+ * Handles both environment-based and localStorage-based initialization.
  */
 function AppWithVowel() {
   const [vowel, setVowel] = useState<VowelClientType>(getVowel());
+  const [isReady, setIsReady] = useState(false);
   const appId = import.meta.env.VITE_VOWEL_APP_ID;
 
   useEffect(() => {
-    const unsubscribe = subscribeToVowelChanges((client) => setVowel(client));
-    return () => unsubscribe();
+    // Subscribe to vowel client changes (both env and localStorage init paths)
+    const unsubscribe = subscribeToVowelChanges((client) => {
+      setVowel(client);
+    });
+
+    // Mark as ready after a short delay to ensure we're not racing with initFromStoredConfig
+    const timer = setTimeout(() => setIsReady(true), 50);
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timer);
+    };
   }, []);
 
-  const vowelReady = vowel !== null || !appId;
-
-  // If Vowel is optional and no appId is set, render without VowelProvider
-  if (!appId) {
-    return (
-      <>
-        <VowelRouterSync />
-        <App />
-      </>
-    );
-  }
-
-  // Show simple loading state while Vowel initializes
-  if (!vowelReady) {
+  // Show loading state until we've determined the vowel client status
+  if (!isReady) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
@@ -115,6 +115,17 @@ function AppWithVowel() {
     );
   }
 
+  // If no vowel client exists (neither env nor localStorage initialized), render without provider
+  if (!vowel) {
+    return (
+      <>
+        <VowelRouterSync />
+        <App />
+      </>
+    );
+  }
+
+  // Always wrap with VowelProvider when a vowel client exists
   return (
     <VowelProvider client={vowel}>
       <VowelRouterSync />

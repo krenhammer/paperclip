@@ -288,6 +288,9 @@ function createVowelClient(config: VowelClientConfig): Vowel {
       showOnMobile: false,
     },
     _voiceConfig: VOICE_CONFIG,
+    turnDetection: {
+      mode: "server_vad",
+    },
     onUserSpeakingChange: (isSpeaking: boolean) => {
       console.log(
         isSpeaking ? "🗣️ User started speaking" : "🔇 User stopped speaking"

@@ -36,6 +36,8 @@ interface PaperclipVoiceButtonProps {
   onConfigured?: (credentials: StoredVoiceCredentials) => void;
   /** Callback when voice config is cleared */
   onCleared?: () => void;
+  /** Callback when user clicks "Start Session" after configuring */
+  onStartSession?: () => void;
 }
 
 /**
@@ -52,6 +54,7 @@ export function PaperclipVoiceButton({
   size = "md",
   onConfigured,
   onCleared,
+  onStartSession,
 }: PaperclipVoiceButtonProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
@@ -161,6 +164,7 @@ export function PaperclipVoiceButton({
         onOpenChange={setModalOpen}
         onConfigured={handleConfigured}
         onCleared={handleCleared}
+        onStartSession={onStartSession}
       />
     </>
   );
@@ -175,6 +179,7 @@ export function PaperclipVoiceButtonFull({
   size = "md",
   onConfigured,
   onCleared,
+  onStartSession,
 }: Omit<PaperclipVoiceButtonProps, "size"> & { size?: "sm" | "md" }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
