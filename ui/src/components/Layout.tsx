@@ -31,6 +31,7 @@ import {
   getVowel,
   subscribeToVowelChanges,
 } from "../vowel.client";
+import { setVoiceCurrentCompanyId } from "../vowel.company-actions";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
@@ -173,6 +174,11 @@ export function Layout() {
   }, []);
 
   useCompanyPageMemory();
+
+  // Sync selected company ID with voice system for voice actions
+  useEffect(() => {
+    setVoiceCurrentCompanyId(selectedCompanyId);
+  }, [selectedCompanyId]);
 
   useKeyboardShortcuts({
     enabled: keyboardShortcutsEnabled,

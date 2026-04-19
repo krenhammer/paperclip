@@ -46,6 +46,34 @@ const stateChangeListeners = new Set<StateChangeListener>();
 /** Current conversation state */
 let currentConversationState: ConversationState = "idle";
 
+/** Individual state flags for computing overall state */
+let isUserSpeakingFlag = false;
+let isAIThinkingFlag = false;
+let isAISpeakingFlag = false;
+
+/**
+ * Compute the overall conversation state based on individual flags.
+ * Priority: user-speaking > ai-speaking > ai-thinking > idle
+ */
+function computeConversationState(): ConversationState {
+  if (isUserSpeakingFlag) return "user-speaking";
+  if (isAISpeakingFlag) return "ai-speaking";
+  if (isAIThinkingFlag) return "ai-thinking";
+  return "idle";
+}
+
+/**
+ * Update the conversation state and notify listeners if changed.
+ * This is called after any state flag changes.
+ */
+function updateConversationState() {
+  const newState = computeConversationState();
+  if (newState !== currentConversationState) {
+    currentConversationState = newState;
+    stateChangeListeners.forEach((listener) => listener(newState));
+  }
+}
+
 /**
  * Get the current conversation state
  */
@@ -63,16 +91,6 @@ export function subscribeToConversationState(
   // Sync with current state immediately
   listener(currentConversationState);
   return () => stateChangeListeners.delete(listener);
-}
-
-/**
- * Update the conversation state and notify listeners
- */
-function setConversationState(state: ConversationState) {
-  if (state !== currentConversationState) {
-    currentConversationState = state;
-    stateChangeListeners.forEach((listener) => listener(state));
-  }
 }
 
 /** Storage key for voice configuration */
@@ -234,8 +252,8 @@ const SYSTEM_INSTRUCTIONS = `You are a helpful voice assistant for Paperclip, an
 ## CRITICAL: Be Terse
 **⚠️ RESPONSE STYLE**: Be very terse and direct. Never say phrases like "I have opened...", "Let me know...", "I can help you...", or "Is there anything else...". Just state facts and complete actions without conversational filler. Use single words or short phrases when possible.
 
-## CRITICAL: Write to App Store, Not DOM
-**⚠️ MOST IMPORTANT RULE**: When performing actions, you MUST write to the application store/state management system, NOT manipulate the DOM directly. Always use registered actions that modify the app store. The UI will automatically update to reflect state changes.
+## CRITICAL: Work Through the UI
+**⚠️ MOST IMPORTANT RULE**: When creating or modifying data, always work through the UI dialogs/forms, NOT direct API calls. This lets users see and verify values before submitting. Actions open dialogs with pre-filled values - users can edit and then confirm.
 
 ## CRITICAL: Always Refer to Context for Information
 Before answering ANY question or performing ANY action, ALWAYS check the <context> section for current information. The context contains the most up-to-date state of the application.
@@ -264,12 +282,50 @@ Navigation is handled automatically by the navigation adapter. Users can say "go
 ### App State:
 - getAppState: Get current route and basic app state. CALL THIS FIRST when starting a new session (initial greeting) - context may not be populated yet.
 
-## How to Use:
-- To navigate: Say "go to [page]" or "show me [page]" - e.g., "go to agents", "show me the dashboard"
-- To get help: Ask about what you can do in the current page
-- **DO NOT use DOM manipulation** - use navigation adapter or registered actions
+### Company Management (READ-ONLY):
+- getCompanySynopsis: Get comprehensive company overview (agents, tasks, costs, approvals). Call for "company status", "overview", "how is my company doing".
+- listCompanies: List all accessible companies. Call for "list companies", "show my companies".
+- getCompany: Get detailed company info. Call for "company details", "tell me about this company".
+- createCompany: Create a new company directly. Call for "create company", "add company", "new company".
 
-Help users navigate the Paperclip control plane and understand their AI agents, projects, and tasks.`;
+### Creating via UI Dialogs (SHOWS UI FOR USER VERIFICATION):
+- createIssue: Opens New Issue dialog with pre-filled values. Call for "create issue", "add task", "new issue". Values are shown in the dialog for user to verify before submitting.
+- createGoal: Opens New Goal dialog with pre-filled values. Call for "create goal", "set objective", "new goal". Values are shown in the dialog for user to verify before submitting.
+- createProject: Opens New Project dialog. Call for "create project", "new project".
+- createAgent: Opens New Agent dialog. Call for "create agent", "new agent", "hire agent".
+
+### Dialog Control:
+- submitDialog: Confirm/submit the currently open dialog. Call when user says "submit", "create it", "confirm", "save it" after filling in a dialog.
+- cancelDialog: Cancel/close the current dialog without saving. Call when user says "cancel", "close", "never mind".
+
+## Voice Workflow Examples:
+**Creating an issue:**
+1. User: "Create issue: Fix the login bug"
+2. AI calls createIssue with title="Fix the login bug"
+3. AI responds: "Opened issue dialog with title. Say 'submit' when ready."
+4. User sees the dialog with pre-filled title, can add more details
+5. User: "Submit"
+6. AI responds: "Press Enter or click Create to submit."
+
+**Multiple fields:**
+1. User: "Create goal: Launch v2, target December 31st"
+2. AI calls createGoal with title="Launch v2", targetDate="2024-12-31"
+3. AI responds: "Opened goal dialog with title, target date. Say 'submit' when ready."
+
+**Cancel:**
+1. User: "Cancel"
+2. AI calls cancelDialog
+3. AI responds: "Cancelled issue creation."
+
+## How to Use:
+- To navigate: Say "go to [page]" or "show me [page]"
+- To get company status: Say "company synopsis", "how is my company doing"
+- To create items via UI: Say "create issue", "add goal", "new project" - values appear in dialog for verification
+- To submit dialog: Say "submit", "create it", "confirm"
+- To cancel dialog: Say "cancel", "close", "never mind"
+- **DO NOT use DOM manipulation** - use registered actions only
+
+Help users navigate the Paperclip control plane, view summaries via voice, and create items through UI dialogs.`;
 
 /**
  * Voice configuration for the Paperclip assistant
@@ -343,22 +399,22 @@ function createVowelClient(config: VowelClientConfig): Vowel {
       console.log(
         isSpeaking ? "🗣️ User started speaking" : "🔇 User stopped speaking"
       );
-      setConversationState(isSpeaking ? "user-speaking" : "idle");
+      isUserSpeakingFlag = isSpeaking;
+      updateConversationState();
     },
     onAIThinkingChange: (isThinking: boolean) => {
       console.log(
         isThinking ? "🧠 AI started thinking" : "💭 AI stopped thinking"
       );
-      if (isThinking) {
-        setConversationState("ai-thinking");
-      }
-      // When thinking stops, the state will transition to ai-speaking or idle
+      isAIThinkingFlag = isThinking;
+      updateConversationState();
     },
     onAISpeakingChange: (isSpeaking: boolean) => {
       console.log(
         isSpeaking ? "🔊 AI started speaking" : "🔇 AI stopped speaking"
       );
-      setConversationState(isSpeaking ? "ai-speaking" : "idle");
+      isAISpeakingFlag = isSpeaking;
+      updateConversationState();
     },
   };
 
@@ -384,6 +440,15 @@ function createVowelClient(config: VowelClientConfig): Vowel {
 
   return vowel;
 }
+
+import {
+  registerCompanyActions,
+  setVoiceCurrentCompanyId,
+} from "./vowel.company-actions";
+import { registerUIActions } from "./vowel.ui-actions";
+
+// Re-export voice action utilities for external integration
+export { setVoiceCurrentCompanyId };
 
 /**
  * Register custom actions for the Vowel voice agent.
@@ -433,6 +498,12 @@ function registerCustomActions(vowel: Vowel) {
       return { success: false, error: "Navigation not available" };
     }
   );
+
+  // Register voice actions
+  // Company actions (getters) - API-based for reading data
+  registerCompanyActions(vowel);
+  // UI actions (creates) - open dialogs so users can verify before submitting
+  registerUIActions(vowel);
 }
 
 /**
@@ -528,7 +599,11 @@ export function cleanupVoiceAgent(): void {
     vowelInstance.stopSession();
     vowelInstance = null;
     vowelChangeListeners.forEach((listener) => listener(null));
-    setConversationState("idle");
+    // Reset all state flags
+    isUserSpeakingFlag = false;
+    isAIThinkingFlag = false;
+    isAISpeakingFlag = false;
+    updateConversationState();
   }
 }
 

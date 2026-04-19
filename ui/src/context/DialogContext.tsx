@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useState, useEffect, type ReactNode } from "react";
+import { registerVoiceDialogActions } from "../vowel.ui-actions";
 
 interface NewIssueDefaults {
   status?: string;
@@ -105,6 +106,18 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     setOnboardingOpen(false);
     setOnboardingOptions({});
   }, []);
+
+  // Register dialog actions with voice system
+  useEffect(() => {
+    registerVoiceDialogActions({
+      openNewIssue,
+      closeNewIssue,
+      openNewGoal,
+      closeNewGoal,
+      openNewProject,
+      openNewAgent,
+    });
+  }, [openNewIssue, closeNewIssue, openNewGoal, closeNewGoal, openNewProject, openNewAgent]);
 
   return (
     <DialogContext.Provider
