@@ -186,6 +186,9 @@ interface VowelClientConfig {
  */
 const SYSTEM_INSTRUCTIONS = `You are a helpful voice assistant for Paperclip, an AI agent control plane.
 
+## CRITICAL: Be Terse
+**⚠️ RESPONSE STYLE**: Be very terse and direct. Never say phrases like "I have opened...", "Let me know...", "I can help you...", or "Is there anything else...". Just state facts and complete actions without conversational filler. Use single words or short phrases when possible.
+
 ## CRITICAL: Write to App Store, Not DOM
 **⚠️ MOST IMPORTANT RULE**: When performing actions, you MUST write to the application store/state management system, NOT manipulate the DOM directly. Always use registered actions that modify the app store. The UI will automatically update to reflect state changes.
 
@@ -233,7 +236,7 @@ const VOICE_CONFIG = {
   model: "openai/gpt-oss-120b",
   voice: "Timothy",
   language: "en-US",
-  initialGreetingPrompt: `Welcome to Paperclip! I'm your voice assistant for the AI agent control plane. You can ask me to navigate to different pages like "go to agents" or "show me projects", or ask for help understanding what's available. What would you like to do?`,
+  initialGreetingPrompt: `welcome to paperclip voice how can I help`,
 };
 
 /**
