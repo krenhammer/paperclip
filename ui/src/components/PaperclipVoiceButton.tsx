@@ -3,12 +3,15 @@
  *
  * Shows a button to configure voice when no environment-based
  * VOWEL_APP_ID is set. Opens the configuration modal when clicked.
+ * Displays different icons based on AI conversation state.
  *
  * @module components/PaperclipVoiceButton
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { Mic, Settings } from "lucide-react";
+import { BsStars } from "react-icons/bs";
+import { LuBrain, LuMessageSquare } from "react-icons/lu";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -22,6 +25,10 @@ import {
   getVoiceConfig,
   type StoredVoiceCredentials,
 } from "./PaperclipVoiceConfigModal";
+import {
+  subscribeToConversationState,
+  type ConversationState,
+} from "@/vowel.client";
 import { cn } from "@/lib/utils";
 
 /**
@@ -38,6 +45,39 @@ interface PaperclipVoiceButtonProps {
   onCleared?: () => void;
   /** Callback when user clicks "Start Session" after configuring */
   onStartSession?: () => void;
+  /** Whether to show conversation state icons (only works when voice is active) */
+  showConversationState?: boolean;
+}
+
+/**
+ * Get the icon component and tooltip text for a conversation state
+ */
+function getStateDisplay(
+  state: ConversationState,
+  size: number
+): { icon: React.ReactNode; tooltip: string } {
+  switch (state) {
+    case "user-speaking":
+      return {
+        icon: <LuMessageSquare size={size} aria-hidden="true" />,
+        tooltip: "You are speaking...",
+      };
+    case "ai-thinking":
+      return {
+        icon: <LuBrain size={size} aria-hidden="true" />,
+        tooltip: "AI is thinking...",
+      };
+    case "ai-speaking":
+      return {
+        icon: <BsStars size={size} aria-hidden="true" />,
+        tooltip: "AI is speaking...",
+      };
+    default:
+      return {
+        icon: <Mic size={size} aria-hidden="true" />,
+        tooltip: "Voice active - click to reconfigure",
+      };
+  }
 }
 
 /**
@@ -55,14 +95,22 @@ export function PaperclipVoiceButton({
   onConfigured,
   onCleared,
   onStartSession,
+  showConversationState = true,
 }: PaperclipVoiceButtonProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
+  const [conversationState, setConversationState] = useState<ConversationState>("idle");
 
   // Check for stored config on mount
   useEffect(() => {
     setHasConfig(hasVoiceConfig());
   }, []);
+
+  // Subscribe to conversation state changes
+  useEffect(() => {
+    if (!showConversationState || !hasConfig) return;
+    return subscribeToConversationState(setConversationState);
+  }, [showConversationState, hasConfig]);
 
   // Listen for storage changes from other tabs
   useEffect(() => {
@@ -104,6 +152,11 @@ export function PaperclipVoiceButton({
     lg: 22,
   };
 
+  // Get the appropriate icon and tooltip based on conversation state
+  const { icon: stateIcon, tooltip: stateTooltip } = hasConfig && showConversationState
+    ? getStateDisplay(conversationState, iconSizes[size])
+    : { icon: <Mic size={iconSizes[size]} aria-hidden="true" />, tooltip: "" };
+
   return (
     <>
       <TooltipProvider delayDuration={300}>
@@ -124,11 +177,11 @@ export function PaperclipVoiceButton({
               )}
               aria-label={
                 hasConfig
-                  ? "Voice configured - click to reconfigure"
+                  ? stateTooltip || "Voice configured - click to reconfigure"
                   : "Configure voice navigation"
               }
             >
-              <Mic size={iconSizes[size]} aria-hidden="true" />
+              {stateIcon}
 
               {/* Settings indicator when not configured */}
               {!hasConfig && (
@@ -151,9 +204,11 @@ export function PaperclipVoiceButton({
           </TooltipTrigger>
           <TooltipContent side="bottom" align="center">
             <p className="text-xs">
-              {hasConfig
-                ? "PaperclipVoice configured - click to reconfigure"
-                : "Configure PaperclipVoice for hands-free navigation"}
+              {!hasConfig
+                ? "Configure PaperclipVoice for hands-free navigation"
+                : showConversationState && stateTooltip
+                  ? stateTooltip
+                  : "PaperclipVoice configured - click to reconfigure"}
             </p>
           </TooltipContent>
         </Tooltip>
@@ -165,6 +220,7 @@ export function PaperclipVoiceButton({
         onConfigured={handleConfigured}
         onCleared={handleCleared}
         onStartSession={onStartSession}
+        isSessionActive={conversationState !== "idle"}
       />
     </>
   );
@@ -180,13 +236,21 @@ export function PaperclipVoiceButtonFull({
   onConfigured,
   onCleared,
   onStartSession,
+  showConversationState = true,
 }: Omit<PaperclipVoiceButtonProps, "size"> & { size?: "sm" | "md" }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
+  const [conversationState, setConversationState] = useState<ConversationState>("idle");
 
   useEffect(() => {
     setHasConfig(hasVoiceConfig());
   }, []);
+
+  // Subscribe to conversation state changes
+  useEffect(() => {
+    if (!showConversationState || !hasConfig) return;
+    return subscribeToConversationState(setConversationState);
+  }, [showConversationState, hasConfig]);
 
   useEffect(() => {
     const handleStorageChange = (event: StorageEvent) => {
@@ -215,6 +279,26 @@ export function PaperclipVoiceButtonFull({
     onCleared?.();
   }, [onCleared]);
 
+  // Get the appropriate icon based on conversation state
+  const { icon: stateIcon } = hasConfig && showConversationState
+    ? getStateDisplay(conversationState, size === "sm" ? 14 : 18)
+    : { icon: <Mic size={size === "sm" ? 14 : 18} aria-hidden="true" /> };
+
+  // Get label based on state
+  const getButtonLabel = () => {
+    if (!hasConfig) return "Enable PaperclipVoice";
+    switch (conversationState) {
+      case "user-speaking":
+        return "Listening...";
+      case "ai-thinking":
+        return "Thinking...";
+      case "ai-speaking":
+        return "Speaking...";
+      default:
+        return "PaperclipVoice Active";
+    }
+  };
+
   return (
     <>
       <Button
@@ -229,10 +313,8 @@ export function PaperclipVoiceButtonFull({
           className
         )}
       >
-        <Mic size={size === "sm" ? 14 : 18} aria-hidden="true" />
-        <span className="text-sm">
-          {hasConfig ? "PaperclipVoice Active" : "Enable PaperclipVoice"}
-        </span>
+        {stateIcon}
+        <span className="text-sm">{getButtonLabel()}</span>
         {!hasConfig && (
           <span className="ml-1 flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-primary opacity-75"></span>
@@ -246,6 +328,8 @@ export function PaperclipVoiceButtonFull({
         onOpenChange={setModalOpen}
         onConfigured={handleConfigured}
         onCleared={handleCleared}
+        onStartSession={onStartSession}
+        isSessionActive={conversationState !== "idle"}
       />
     </>
   );

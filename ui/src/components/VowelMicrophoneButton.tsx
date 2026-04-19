@@ -72,7 +72,7 @@ export function VowelMicrophoneButton({
       if (state.isAISpeaking) return "AI is speaking... (click to stop)";
       return "Voice session active (click to stop)";
     }
-    return "Start voice assistant";
+    return "Start Vowel Voice Assistant";
   };
 
   /**

@@ -30,6 +30,51 @@ type VowelChangeListener = (client: Vowel | null) => void;
 /** Set of listeners for vowel client changes */
 const vowelChangeListeners = new Set<VowelChangeListener>();
 
+/** Conversation state type */
+export type ConversationState =
+  | "idle"           // Waiting for input, microphone active
+  | "user-speaking"  // User is speaking
+  | "ai-thinking"    // AI is processing/thinking
+  | "ai-speaking";   // AI is talking
+
+/** Callback type for conversation state change listeners */
+type StateChangeListener = (state: ConversationState) => void;
+
+/** Set of listeners for conversation state changes */
+const stateChangeListeners = new Set<StateChangeListener>();
+
+/** Current conversation state */
+let currentConversationState: ConversationState = "idle";
+
+/**
+ * Get the current conversation state
+ */
+export function getConversationState(): ConversationState {
+  return currentConversationState;
+}
+
+/**
+ * Subscribe to conversation state changes
+ */
+export function subscribeToConversationState(
+  listener: StateChangeListener
+): () => void {
+  stateChangeListeners.add(listener);
+  // Sync with current state immediately
+  listener(currentConversationState);
+  return () => stateChangeListeners.delete(listener);
+}
+
+/**
+ * Update the conversation state and notify listeners
+ */
+function setConversationState(state: ConversationState) {
+  if (state !== currentConversationState) {
+    currentConversationState = state;
+    stateChangeListeners.forEach((listener) => listener(state));
+  }
+}
+
 /** Storage key for voice configuration */
 const STORAGE_KEY = "paperclip-voice-config";
 
@@ -298,16 +343,22 @@ function createVowelClient(config: VowelClientConfig): Vowel {
       console.log(
         isSpeaking ? "🗣️ User started speaking" : "🔇 User stopped speaking"
       );
+      setConversationState(isSpeaking ? "user-speaking" : "idle");
     },
     onAIThinkingChange: (isThinking: boolean) => {
       console.log(
         isThinking ? "🧠 AI started thinking" : "💭 AI stopped thinking"
       );
+      if (isThinking) {
+        setConversationState("ai-thinking");
+      }
+      // When thinking stops, the state will transition to ai-speaking or idle
     },
     onAISpeakingChange: (isSpeaking: boolean) => {
       console.log(
         isSpeaking ? "🔊 AI started speaking" : "🔇 AI stopped speaking"
       );
+      setConversationState(isSpeaking ? "ai-speaking" : "idle");
     },
   };
 
@@ -477,6 +528,7 @@ export function cleanupVoiceAgent(): void {
     vowelInstance.stopSession();
     vowelInstance = null;
     vowelChangeListeners.forEach((listener) => listener(null));
+    setConversationState("idle");
   }
 }
 

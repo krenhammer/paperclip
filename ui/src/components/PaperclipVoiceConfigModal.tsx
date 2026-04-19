@@ -22,6 +22,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -59,6 +65,8 @@ interface PaperclipVoiceConfigModalProps {
   onCleared?: () => void;
   /** Callback when user clicks "Start Session" after configuring */
   onStartSession?: () => void;
+  /** Whether a Vowel session is currently active */
+  isSessionActive?: boolean;
 }
 
 const STORAGE_KEY = "paperclip-voice-config";
@@ -123,6 +131,7 @@ export function PaperclipVoiceConfigModal({
   onConfigured,
   onCleared,
   onStartSession,
+  isSessionActive = false,
 }: PaperclipVoiceConfigModalProps) {
   const [mode, setMode] = useState<ConfigMode>("hosted");
   const [hostedAppId, setHostedAppId] = useState("");
@@ -293,6 +302,12 @@ export function PaperclipVoiceConfigModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
+        <style>{`
+          @keyframes glow {
+            0%, 100% { box-shadow: 0 0 15px rgba(99, 102, 241, 0.4); }
+            50% { box-shadow: 0 0 25px rgba(99, 102, 241, 0.8); }
+          }
+        `}</style>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Mic className="h-5 w-5" />
@@ -370,6 +385,7 @@ export function PaperclipVoiceConfigModal({
               <Button
                 onClick={handleSaveHosted}
                 disabled={!hostedAppId.trim()}
+                variant={hasStoredConfig ? "outline" : "default"}
                 className="flex-1"
               >
                 Save & Enable PaperclipVoice
@@ -467,6 +483,7 @@ export function PaperclipVoiceConfigModal({
                       selfHostedJwt.split(".").length !== 3
                     : !selfHostedAppId.trim() || !selfHostedUrl.trim()
                 }
+                variant={hasStoredConfig ? "outline" : "default"}
                 className="flex-1"
               >
                 Save & Enable PaperclipVoice
@@ -499,18 +516,40 @@ export function PaperclipVoiceConfigModal({
           </div>
         )}
 
-        {/* Start Session button - shown after saving credentials */}
-        {justSaved && (
-          <Button
-            onClick={() => {
-              onStartSession?.();
-              onOpenChange(false);
-            }}
-            className="w-full gap-2"
-          >
-            <Mic className="h-4 w-4" />
-            Start Session
-          </Button>
+        {/* Start Session button - shown when credentials exist and are valid */}
+        {(justSaved || hasStoredConfig) && (
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  onClick={() => {
+                    onStartSession?.();
+                    onOpenChange(false);
+                  }}
+                  disabled={
+                    mode === "hosted"
+                      ? !hostedAppId.trim()
+                      : useJwtFromEnv
+                        ? !selfHostedJwt.trim() ||
+                          !selfHostedJwt.includes(".") ||
+                          selfHostedJwt.split(".").length !== 3
+                        : !selfHostedAppId.trim() || !selfHostedUrl.trim()
+                  }
+                  className={cn(
+                    "w-full gap-2",
+                    !isSessionActive &&
+                      "shadow-[0_0_15px_rgba(99,102,241,0.6)] animate-[glow_2s_ease-in-out_infinite]"
+                  )}
+                >
+                  <Mic className="h-4 w-4" />
+                  Start Session
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Start Vowel Voice Assistant</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
 
         <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
