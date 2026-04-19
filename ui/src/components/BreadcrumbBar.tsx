@@ -15,15 +15,23 @@ import {
 import { Fragment, useMemo } from "react";
 import { PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
 import { PluginLauncherOutlet, usePluginLaunchers } from "@/plugins/launchers";
+import { VowelMicrophoneButtonCompact } from "./VowelMicrophoneButton";
 
 type GlobalToolbarContext = { companyId: string | null; companyPrefix: string | null };
 
 function GlobalToolbarPlugins({ context }: { context: GlobalToolbarContext }) {
   const { slots } = usePluginSlots({ slotTypes: ["globalToolbarButton"], companyId: context.companyId });
   const { launchers } = usePluginLaunchers({ placementZones: ["globalToolbarButton"], companyId: context.companyId, enabled: !!context.companyId });
-  if (slots.length === 0 && launchers.length === 0) return null;
+
+  // Check if Vowel is configured (VITE_VOWEL_APP_ID is set)
+  const vowelConfigured = !!import.meta.env.VITE_VOWEL_APP_ID;
+
+  // If no plugins, launchers, or Vowel, return null
+  if (slots.length === 0 && launchers.length === 0 && !vowelConfigured) return null;
+
   return (
     <div className="flex items-center gap-1 ml-auto shrink-0 pl-2">
+      {vowelConfigured && <VowelMicrophoneButtonCompact size="sm" />}
       <PluginSlotOutlet slotTypes={["globalToolbarButton"]} context={context} className="flex items-center gap-1" />
       <PluginLauncherOutlet placementZones={["globalToolbarButton"]} context={context} className="flex items-center gap-1" />
     </div>

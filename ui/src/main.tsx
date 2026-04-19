@@ -1,9 +1,10 @@
 import * as React from "react";
-import { StrictMode } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import * as ReactDOM from "react-dom";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "@/lib/router";
+import { BrowserRouter, useLocation, useNavigate } from "@/lib/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { VowelProvider } from "@vowel.to/client/react";
 import { App } from "./App";
 import { CompanyProvider } from "./context/CompanyContext";
 import { LiveUpdatesProvider } from "./context/LiveUpdatesProvider";
@@ -17,6 +18,14 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initPluginBridge } from "./plugins/bridge-init";
 import { PluginLauncherProvider } from "./plugins/launchers";
+import {
+  getVowel,
+  setAppId,
+  subscribeToVowelChanges,
+  setNavigateFunction,
+  setCurrentLocation,
+  type VowelClientType,
+} from "./vowel.client";
 import "@mdxeditor/editor/style.css";
 import "./index.css";
 
@@ -26,6 +35,92 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js");
   });
+}
+
+/**
+ * Hook to initialize Vowel client after app mounts.
+ * Call setAppId from useEffect, not at module load, to ensure context is ready.
+ */
+function useVowelInit() {
+  useEffect(() => {
+    const appId = import.meta.env.VITE_VOWEL_APP_ID;
+    if (appId) {
+      setAppId(appId);
+    }
+  }, []);
+}
+
+/**
+ * Component that initializes Vowel.
+ * Must be mounted outside any loading gate so initialization runs on mount.
+ */
+function VowelInit() {
+  useVowelInit();
+  return null;
+}
+
+/**
+ * Component that syncs React Router state with Vowel context.
+ * Must be inside BrowserRouter to access useNavigate and useLocation.
+ */
+function VowelRouterSync() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    setNavigateFunction(navigate);
+  }, [navigate]);
+
+  useEffect(() => {
+    setCurrentLocation(location);
+  }, [location]);
+
+  return null;
+}
+
+/**
+ * Main app content with Vowel provider.
+ * Shows loading state until Vowel client is ready.
+ */
+function AppWithVowel() {
+  const [vowel, setVowel] = useState<VowelClientType>(getVowel());
+  const appId = import.meta.env.VITE_VOWEL_APP_ID;
+
+  useEffect(() => {
+    const unsubscribe = subscribeToVowelChanges((client) => setVowel(client));
+    return () => unsubscribe();
+  }, []);
+
+  const vowelReady = vowel !== null || !appId;
+
+  // If Vowel is optional and no appId is set, render without VowelProvider
+  if (!appId) {
+    return (
+      <>
+        <VowelRouterSync />
+        <App />
+      </>
+    );
+  }
+
+  // Show simple loading state while Vowel initializes
+  if (!vowelReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">Initializing voice assistant...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <VowelProvider client={vowel}>
+      <VowelRouterSync />
+      <App />
+    </VowelProvider>
+  );
 }
 
 const queryClient = new QueryClient({
@@ -42,6 +137,8 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <BrowserRouter>
+          {/* VowelInit runs outside any loading gate - required for context-ready initialization */}
+          <VowelInit />
           <CompanyProvider>
             <EditorAutocompleteProvider>
               <ToastProvider>
@@ -52,7 +149,7 @@ createRoot(document.getElementById("root")!).render(
                         <PanelProvider>
                           <PluginLauncherProvider>
                             <DialogProvider>
-                              <App />
+                              <AppWithVowel />
                             </DialogProvider>
                           </PluginLauncherProvider>
                         </PanelProvider>

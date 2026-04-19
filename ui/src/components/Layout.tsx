@@ -18,6 +18,7 @@ import { MobileBottomNav } from "./MobileBottomNav";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
+import { VowelMicrophoneButton } from "./VowelMicrophoneButton";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
@@ -417,6 +418,13 @@ export function Layout() {
       <NewAgentDialog />
       <KeyboardShortcutsCheatsheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <ToastViewport />
+
+      {/* Vowel Voice FAB - Fixed bottom-right corner */}
+      {import.meta.env.VITE_VOWEL_APP_ID && (
+        <div className="fixed bottom-6 right-6 z-50 hidden md:block">
+          <VowelMicrophoneButton size="lg" showStatus={false} />
+        </div>
+      )}
       </div>
     </GeneralSettingsProvider>
   );
