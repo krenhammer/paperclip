@@ -34,6 +34,7 @@ import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { VowelMicrophoneButton } from "./VowelMicrophoneButton";
 import { getVowel } from "../vowel.client";
+import { TursoRagDebugButton } from "./TursoRagDebugButton";
 
 function SortableCompanyItem({
   company,
@@ -246,6 +247,11 @@ export function CompanyRail() {
           <VowelMicrophoneButton size="sm" />
         </div>
       )}
+
+      {/* RAG Debug button */}
+      <div className="flex items-center justify-center py-2 shrink-0">
+        <TursoRagDebugButton size="sm" variant="default" />
+      </div>
 
       {/* Add company button */}
       <div className="flex items-center justify-center py-2 shrink-0">

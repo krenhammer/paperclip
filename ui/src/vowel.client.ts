@@ -282,6 +282,11 @@ Navigation is handled automatically by the navigation adapter. Users can say "go
 ### App State:
 - getAppState: Get current route and basic app state. CALL THIS FIRST when starting a new session (initial greeting) - context may not be populated yet.
 
+### Knowledge Base (RAG-Powered Documentation Search):
+- searchKnowledgeBase: Search the Paperclip documentation for answers. Use this when users ask questions about how Paperclip works, its features, idioms, or documentation. The AI searches first, then answers based on retrieved context.
+- getKnowledgeBaseStatus: Check if the knowledge base is ready and how many documents are indexed.
+- openRagDebugChat: Open the debug panel to see search results and voice transcripts. Users can say "open debug chat" or "show search results".
+
 ### Company Management (READ-ONLY):
 - getCompanySynopsis: Get comprehensive company overview (agents, tasks, costs, approvals). Call for "company status", "overview", "how is my company doing".
 - listCompanies: List all accessible companies. Call for "list companies", "show my companies".
@@ -316,6 +321,14 @@ Navigation is handled automatically by the navigation adapter. Users can say "go
 1. User: "Cancel"
 2. AI calls cancelDialog
 3. AI responds: "Cancelled issue creation."
+
+**Asking about Paperclip (RAG-powered):**
+1. User: "What is Paperclip?" or "How do routines work?"
+2. AI calls searchKnowledgeBase with query="What is Paperclip?" or "how do routines work"
+3. AI receives relevant documentation chunks
+4. AI responds with answer based on retrieved context: "Paperclip is an AI agent control plane..."
+5. User: "Show me where that came from" or "Open debug chat"
+6. AI calls openRagDebugChat to show the search results
 
 ## How to Use:
 - To navigate: Say "go to [page]" or "show me [page]"
@@ -446,6 +459,7 @@ import {
   setVoiceCurrentCompanyId,
 } from "./vowel.company-actions";
 import { registerUIActions } from "./vowel.ui-actions";
+import { registerRAGActions } from "./vowel.rag-actions";
 
 // Re-export voice action utilities for external integration
 export { setVoiceCurrentCompanyId };
@@ -504,6 +518,8 @@ function registerCustomActions(vowel: Vowel) {
   registerCompanyActions(vowel);
   // UI actions (creates) - open dialogs so users can verify before submitting
   registerUIActions(vowel);
+  // RAG actions - knowledge base search for documentation queries
+  registerRAGActions(vowel);
 }
 
 /**

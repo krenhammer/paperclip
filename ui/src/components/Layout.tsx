@@ -438,7 +438,7 @@ export function Layout() {
       <ToastViewport />
 
       {/* Vowel Voice FAB - Fixed bottom-right corner */}
-      <VoiceControlFab />
+      {/* <VoiceControlFab /> */}
       </div>
     </GeneralSettingsProvider>
   );
@@ -559,18 +559,24 @@ function VoiceControlFab() {
   // Don't show anything on mobile (handled by MobileBottomNav if needed)
   return (
     <div className="fixed bottom-6 right-6 z-50 hidden md:block">
-      {hasConfig || envAppId ? (
-        // Config exists: show microphone button that toggles voice session
-        <VowelMicrophoneButton size="lg" showStatus={false} />
-      ) : (
-        // No config: show configure button that opens config modal
-        <PaperclipVoiceButton
-          size="lg"
-          onConfigured={handleConfigured}
-          onCleared={handleCleared}
-          onStartSession={handleStartSession}
-        />
-      )}
+      <div className="flex flex-col items-end gap-3">
+        {/* Vowel Voice Button */}
+        {hasConfig || envAppId ? (
+          // Config exists: show microphone button that toggles voice session
+          <VowelMicrophoneButton size="lg" showStatus={false} />
+        ) : (
+          // No config: show configure button that opens config modal
+          <PaperclipVoiceButton
+            size="lg"
+            onConfigured={handleConfigured}
+            onCleared={handleCleared}
+            onStartSession={handleStartSession}
+          />
+        )}
+
+        {/* Turso RAG Debug Button - positioned below Vowel */}
+        <TursoRagDebugButton size="lg" />
+      </div>
     </div>
   );
 }
