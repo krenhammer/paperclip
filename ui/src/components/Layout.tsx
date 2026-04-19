@@ -19,6 +19,16 @@ import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
 import { VowelMicrophoneButton } from "./VowelMicrophoneButton";
+import {
+  PaperclipVoiceButton,
+  PaperclipVoiceButtonFull,
+} from "./PaperclipVoiceButton";
+import {
+  hasVoiceConfig,
+  initFromStoredConfig,
+  getVoiceConfig,
+  cleanupVoiceAgent,
+} from "../vowel.client";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
@@ -420,12 +430,95 @@ export function Layout() {
       <ToastViewport />
 
       {/* Vowel Voice FAB - Fixed bottom-right corner */}
-      {import.meta.env.VITE_VOWEL_APP_ID && (
-        <div className="fixed bottom-6 right-6 z-50 hidden md:block">
-          <VowelMicrophoneButton size="lg" showStatus={false} />
-        </div>
-      )}
+      <VoiceControlFab />
       </div>
     </GeneralSettingsProvider>
+  );
+}
+
+/**
+ * Voice control FAB that shows either:
+ * - VowelMicrophoneButton when env VITE_VOWEL_APP_ID is set
+ * - PaperclipVoiceButton when no env config (allows localStorage-based config)
+ */
+function VoiceControlFab() {
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+
+  // Check for existing config on mount and auto-initialize if found
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Check for env-based config (always takes precedence)
+    const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
+    if (envAppId) {
+      setVoiceEnabled(true);
+      return;
+    }
+
+    // Check for localStorage-based config
+    if (hasVoiceConfig()) {
+      const config = getVoiceConfig();
+      if (config) {
+        const success = initFromStoredConfig(config);
+        setVoiceEnabled(success);
+      }
+    }
+  }, []);
+
+  // Handle successful configuration from modal
+  const handleConfigured = useCallback(() => {
+    setVoiceEnabled(true);
+  }, []);
+
+  // Handle config cleared from modal
+  const handleCleared = useCallback(() => {
+    setVoiceEnabled(false);
+    cleanupVoiceAgent();
+  }, []);
+
+  // Listen for storage changes from other tabs
+  useEffect(() => {
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === "paperclip-voice-config") {
+        if (event.newValue) {
+          // Config was added/updated
+          const config = getVoiceConfig();
+          if (config) {
+            const success = initFromStoredConfig(config);
+            setVoiceEnabled(success);
+          }
+        } else {
+          // Config was removed
+          setVoiceEnabled(false);
+          cleanupVoiceAgent();
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
+
+  // Env-based config takes precedence
+  const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
+
+  // Don't show anything on mobile (handled by MobileBottomNav if needed)
+  return (
+    <div className="fixed bottom-6 right-6 z-50 hidden md:block">
+      {envAppId ? (
+        // Env-based config: show microphone button directly
+        <VowelMicrophoneButton size="lg" showStatus={false} />
+      ) : voiceEnabled ? (
+        // LocalStorage config active: show microphone button
+        <VowelMicrophoneButton size="lg" showStatus={false} />
+      ) : (
+        // No config: show configure button
+        <PaperclipVoiceButton
+          size="lg"
+          onConfigured={handleConfigured}
+          onCleared={handleCleared}
+        />
+      )}
+    </div>
   );
 }

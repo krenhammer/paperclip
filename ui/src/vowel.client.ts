@@ -3,12 +3,14 @@
  *
  * This module provides the Vowel client setup with React Router adapters.
  * It uses context-ready initialization to ensure stores are loaded before client init.
+ * Supports both environment-based and localStorage-based configuration.
  *
  * @module vowel.client
  */
 
 import { Vowel, createReactRouterAdapters } from "@vowel.to/client";
 import type { NavigateFunction, Location } from "react-router-dom";
+import type { StoredVoiceCredentials } from "./components/PaperclipVoiceConfigModal";
 
 /** Vowel client instance - null until initialized */
 let vowelInstance: Vowel | null = null;
@@ -27,6 +29,112 @@ type VowelChangeListener = (client: Vowel | null) => void;
 
 /** Set of listeners for vowel client changes */
 const vowelChangeListeners = new Set<VowelChangeListener>();
+
+/** Storage key for voice configuration */
+const STORAGE_KEY = "paperclip-voice-config";
+
+/** SaaS realtime URL - can be overridden via env var */
+const HOSTED_REALTIME_URL =
+  import.meta.env.VITE_VOWEL_URL || "wss://realtime.vowel.to/v1";
+
+/**
+ * Configuration modes for voice agent
+ */
+type ConfigMode = "hosted" | "selfhosted";
+
+/**
+ * Check if voice configuration exists in localStorage
+ */
+export function hasVoiceConfig(): boolean {
+  if (typeof window === "undefined") return false;
+
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) return false;
+
+    const config: StoredVoiceCredentials = JSON.parse(stored);
+    const hasHosted = !!config.hosted?.appId;
+    const hasSelfHostedJwt = !!config.selfHosted?.jwt;
+    const hasSelfHostedAppUrl = !!(
+      config.selfHosted?.appId && config.selfHosted?.url
+    );
+    return hasHosted || hasSelfHostedJwt || hasSelfHostedAppUrl;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get stored voice configuration from localStorage
+ */
+export function getVoiceConfig(): StoredVoiceCredentials | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) return null;
+
+    return JSON.parse(stored) as StoredVoiceCredentials;
+  } catch (error) {
+    console.error("Error reading voice config:", error);
+    return null;
+  }
+}
+
+/**
+ * Clear stored voice configuration
+ */
+export function clearVoiceConfig(): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (error) {
+    console.error("Error clearing voice config:", error);
+  }
+}
+
+/**
+ * Extract realtime URL from JWT payload (JWRT format)
+ * JWT may contain url, endpoint, or rtu claim
+ */
+function extractUrlFromJwt(jwt: string): string | null {
+  try {
+    const parts = jwt.split(".");
+    if (parts.length !== 3) return null;
+
+    const payload = JSON.parse(atob(parts[1]));
+    return payload.url || payload.endpoint || payload.rtu || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get self-hosted realtime URL: JWT claim > env var > fallback
+ */
+function getSelfHostedUrl(jwt?: string): string {
+  // 1. Try to extract from JWT (JWRT format)
+  if (jwt) {
+    const jwtUrl = extractUrlFromJwt(jwt);
+    if (jwtUrl) {
+      console.log("📡 Using realtime URL from JWT:", jwtUrl);
+      return jwtUrl;
+    }
+  }
+
+  // 2. Fall back to environment variable
+  const envUrl = import.meta.env.VITE_VOWEL_URL;
+  if (envUrl) {
+    console.log("📡 Using realtime URL from env:", envUrl);
+    return envUrl;
+  }
+
+  // 3. Final fallback
+  const fallbackUrl = "wss://your-selfhosted-instance.com/realtime";
+  console.warn("⚠️ No URL found in JWT or env, using fallback:", fallbackUrl);
+  return fallbackUrl;
+}
 
 /**
  * Build context for the Vowel AI based on current application state.
@@ -62,33 +170,21 @@ function getPathnameLabel(pathname: string): string {
 }
 
 /**
- * Create a new Vowel client instance with the given app ID.
- *
- * @param appId - The Vowel app ID from vowel.to platform
- * @returns Configured Vowel client instance
+ * Configuration options for creating a Vowel client
  */
-function createVowelClient(appId: string): Vowel {
-  // Create adapters inside the factory to avoid initialization order issues
-  const { navigationAdapter } = createReactRouterAdapters({
-    enableAutomation: false, // Disabled by default - only enable if user explicitly requests DOM automation
-    navigate: (to: string | number) => {
-      if (navigateFn && typeof to === "string") {
-        navigateFn(to);
-      }
-    },
-    location: currentLocation || {
-      pathname: "/",
-      search: "",
-      hash: "",
-      state: null,
-      key: "default",
-    },
-  });
+interface VowelClientConfig {
+  /** The Vowel app ID (for hosted mode) */
+  appId?: string;
+  /** JWT token (for self-hosted mode with JWT auth) */
+  token?: string;
+  /** Realtime API URL (for self-hosted mode) */
+  realtimeApiUrl?: string;
+}
 
-  const vowel = new Vowel({
-    appId: appId,
-
-    instructions: `You are a helpful voice assistant for Paperclip, an AI agent control plane.
+/**
+ * System instructions for the Paperclip voice assistant
+ */
+const SYSTEM_INSTRUCTIONS = `You are a helpful voice assistant for Paperclip, an AI agent control plane.
 
 ## CRITICAL: Write to App Store, Not DOM
 **⚠️ MOST IMPORTANT RULE**: When performing actions, you MUST write to the application store/state management system, NOT manipulate the DOM directly. Always use registered actions that modify the app store. The UI will automatically update to reflect state changes.
@@ -125,22 +221,65 @@ Navigation is handled automatically by the navigation adapter. Users can say "go
 - To get help: Ask about what you can do in the current page
 - **DO NOT use DOM manipulation** - use navigation adapter or registered actions
 
-Help users navigate the Paperclip control plane and understand their AI agents, projects, and tasks.`,
+Help users navigate the Paperclip control plane and understand their AI agents, projects, and tasks.`;
 
+/**
+ * Voice configuration for the Paperclip assistant
+ */
+const VOICE_CONFIG = {
+  provider: "vowel-prime" as const,
+  vowelPrimeConfig: { environment: "staging" as const },
+  llmProvider: "groq" as const,
+  model: "openai/gpt-oss-120b",
+  voice: "Timothy",
+  language: "en-US",
+  initialGreetingPrompt: `Welcome to Paperclip! I'm your voice assistant for the AI agent control plane. You can ask me to navigate to different pages like "go to agents" or "show me projects", or ask for help understanding what's available. What would you like to do?`,
+};
+
+/**
+ * Create a new Vowel client instance with the given configuration.
+ *
+ * @param config - Configuration object containing appId, token, or URL
+ * @returns Configured Vowel client instance
+ */
+function createVowelClient(config: VowelClientConfig): Vowel {
+  const { appId, token, realtimeApiUrl } = config;
+
+  // Create adapters inside the factory to avoid initialization order issues
+  const { navigationAdapter } = createReactRouterAdapters({
+    enableAutomation: false, // Disabled by default - only enable if user explicitly requests DOM automation
+    navigate: (to: string | number) => {
+      if (navigateFn && typeof to === "string") {
+        navigateFn(to);
+      }
+    },
+    location: currentLocation || {
+      pathname: "/",
+      search: "",
+      hash: "",
+      state: null,
+      key: "default",
+    },
+  });
+
+  // Determine the connection parameters
+  const isHosted = !!appId && !token;
+  const effectiveRealtimeUrl = isHosted
+    ? HOSTED_REALTIME_URL
+    : realtimeApiUrl || getSelfHostedUrl(token);
+
+  // Build base config - use any for flexibility with internal properties
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vowelConfig: any = {
+    instructions: SYSTEM_INSTRUCTIONS,
     navigationAdapter,
-    // Automation adapter is disabled by default - uncomment only if user explicitly enables it
-    // automationAdapter,
     floatingCursor: { enabled: false },
-
     borderGlow: {
       enabled: true,
       color: "rgba(99, 102, 241, 0.5)",
       intensity: 30,
       pulse: true,
     },
-
-    // Enable captions by default for accessibility
-    // @ts-ignore - internal caption config may not be fully typed in all builds
     _caption: {
       enabled: true,
       position: "top-center",
@@ -148,28 +287,39 @@ Help users navigate the Paperclip control plane and understand their AI agents, 
       showRole: true,
       showOnMobile: false,
     },
+    _voiceConfig: VOICE_CONFIG,
+    onUserSpeakingChange: (isSpeaking: boolean) => {
+      console.log(
+        isSpeaking ? "🗣️ User started speaking" : "🔇 User stopped speaking"
+      );
+    },
+    onAIThinkingChange: (isThinking: boolean) => {
+      console.log(
+        isThinking ? "🧠 AI started thinking" : "💭 AI stopped thinking"
+      );
+    },
+    onAISpeakingChange: (isSpeaking: boolean) => {
+      console.log(
+        isSpeaking ? "🔊 AI started speaking" : "🔇 AI stopped speaking"
+      );
+    },
+  };
 
-    _voiceConfig: {
-      provider: "vowel-prime",
-      vowelPrimeConfig: { environment: "staging" },
-      llmProvider: "groq",
-      model: "openai/gpt-oss-120b",
-      voice: "Timothy",
-      language: "en-US",
-      initialGreetingPrompt: `Welcome to Paperclip! I'm your voice assistant for the AI agent control plane. You can ask me to navigate to different pages like "go to agents" or "show me projects", or ask for help understanding what's available. What would you like to do?`,
-    },
+  // Add authentication config based on mode
+  if (token) {
+    // Self-hosted with JWT
+    vowelConfig.token = token;
+    vowelConfig.realtimeApiUrl = effectiveRealtimeUrl;
+  } else if (appId) {
+    // Hosted (SaaS) with App ID
+    vowelConfig.appId = appId;
+    vowelConfig.realtimeApiUrl = effectiveRealtimeUrl;
+  }
 
-    onUserSpeakingChange: (isSpeaking) => {
-      console.log(isSpeaking ? "🗣️ User started speaking" : "🔇 User stopped speaking");
-    },
-    onAIThinkingChange: (isThinking) => {
-      console.log(isThinking ? "🧠 AI started thinking" : "💭 AI stopped thinking");
-    },
-    onAISpeakingChange: (isSpeaking) => {
-      console.log(isSpeaking ? "🔊 AI started speaking" : "🔇 AI stopped speaking");
-    },
-  });
+  // Create the Vowel client
+  const vowel = new Vowel(vowelConfig);
 
+  // Register custom actions
   registerCustomActions(vowel);
 
   // Push initial context so AI has state immediately
@@ -199,7 +349,7 @@ function registerCustomActions(vowel: Vowel) {
     async () => {
       const state = buildVowelContext();
       return { success: true, ...state };
-    },
+    }
   );
 
   /**
@@ -213,7 +363,8 @@ function registerCustomActions(vowel: Vowel) {
       parameters: {
         path: {
           type: "string",
-          description: "The path to navigate to (e.g., '/agents', '/projects', '/dashboard')",
+          description:
+            "The path to navigate to (e.g., '/agents', '/projects', '/dashboard')",
         },
       },
     },
@@ -223,7 +374,7 @@ function registerCustomActions(vowel: Vowel) {
         return { success: true, message: `Navigated to ${path}` };
       }
       return { success: false, error: "Navigation not available" };
-    },
+    }
   );
 }
 
@@ -236,9 +387,91 @@ function registerCustomActions(vowel: Vowel) {
 export function setAppId(appId: string) {
   if (!appId) return;
   currentAppId = appId;
-  vowelInstance = createVowelClient(appId);
+  vowelInstance = createVowelClient({ appId });
   console.log("✅ Vowel client initialized with App ID:", appId);
   vowelChangeListeners.forEach((listener) => listener(vowelInstance));
+}
+
+/**
+ * Initialize the Vowel client from stored credentials.
+ * Call this when credentials are saved via the configuration modal.
+ *
+ * @param credentials - StoredVoiceCredentials from localStorage
+ * @returns true if initialization succeeded
+ */
+export function initFromStoredConfig(
+  credentials: StoredVoiceCredentials
+): boolean {
+  if (typeof window === "undefined") return false;
+
+  // Don't reinitialize if already initialized
+  if (vowelInstance) {
+    console.log("🎤 Voice agent already initialized");
+    return true;
+  }
+
+  try {
+    let config: VowelClientConfig = {};
+
+    if (credentials.mode === "hosted" && credentials.hosted?.appId) {
+      // Hosted mode
+      config = {
+        appId: credentials.hosted.appId,
+      };
+      console.log("🎤 Initializing voice agent in hosted mode");
+    } else if (
+      credentials.mode === "selfhosted" &&
+      credentials.selfHosted
+    ) {
+      // Self-hosted mode
+      if (credentials.selfHosted.jwt) {
+        // JWT mode
+        config = {
+          token: credentials.selfHosted.jwt,
+        };
+        console.log("🎤 Initializing voice agent in self-hosted JWT mode");
+      } else if (
+        credentials.selfHosted.appId &&
+        credentials.selfHosted.url
+      ) {
+        // AppId + URL mode
+        config = {
+          appId: credentials.selfHosted.appId,
+          realtimeApiUrl: credentials.selfHosted.url,
+        };
+        console.log(
+          "🎤 Initializing voice agent in self-hosted AppId+URL mode"
+        );
+      }
+    }
+
+    if (!config.appId && !config.token) {
+      console.warn("⚠️ Invalid credentials configuration");
+      return false;
+    }
+
+    // Create the client
+    vowelInstance = createVowelClient(config);
+    console.log("✅ Voice agent initialized from stored configuration");
+    vowelChangeListeners.forEach((listener) => listener(vowelInstance));
+
+    return true;
+  } catch (error) {
+    console.error("❌ Failed to initialize voice agent from stored config:", error);
+    return false;
+  }
+}
+
+/**
+ * Cleanup the voice agent instance
+ */
+export function cleanupVoiceAgent(): void {
+  if (vowelInstance) {
+    console.log("🧹 Cleaning up voice agent");
+    vowelInstance.stopSession();
+    vowelInstance = null;
+    vowelChangeListeners.forEach((listener) => listener(null));
+  }
 }
 
 /**
@@ -257,7 +490,9 @@ export function getVowel(): Vowel | null {
  * @param listener - Callback function called when client changes
  * @returns Unsubscribe function
  */
-export function subscribeToVowelChanges(listener: VowelChangeListener): () => void {
+export function subscribeToVowelChanges(
+  listener: VowelChangeListener
+): () => void {
   vowelChangeListeners.add(listener);
   // Sync with current client immediately - handles race condition
   if (vowelInstance) {
