@@ -4,10 +4,12 @@
  * A button component that initializes and controls the Turso Browser RAG debug tool.
  * Shows a database/Turso icon and can be positioned in various locations.
  *
+ * Uses the React-based RAGDebugTool component for the UI.
+ *
  * @module components/TursoRagDebugButton
  */
 
-import { useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { SiTurso } from 'react-icons/si';
 import { Button } from '@/components/ui/button';
 import {
@@ -17,12 +19,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import {
-  initializeTursoRagDebug,
-  toggleDialog,
-  checkDebugEnabled,
-  openChatWithQuery,
-} from './turso-rag-debug';
+import { RAGDebugTool } from './turso-rag-debug/react';
+import { checkDebugEnabled } from './turso-rag-debug';
 import { registerRagDebugFunctions } from '@/vowel.rag-actions';
 
 /**
@@ -73,6 +71,9 @@ const variantStyles = {
  * The debug tool is only initialized if VITE_TURSO_RAG_DEBUG=true is set
  * in the environment, or if the user has force-enabled it via localStorage.
  *
+ * The RAGDebugTool React component handles the actual UI (FAB, dialog, etc.)
+ * This button is kept for compatibility with existing layouts.
+ *
  * @example
  * ```tsx
  * <TursoRagDebugButton size="md" variant="default" />
@@ -84,30 +85,27 @@ export function TursoRagDebugButton({
   variant = 'purple',
   fullWidth = false,
 }: TursoRagDebugButtonProps) {
-  // Initialize the Turso RAG debug tool on mount and register with voice actions
-  useEffect(() => {
-    // Only initialize if debug mode is enabled
-    if (checkDebugEnabled()) {
-      console.log('[TursoRagDebugButton] Debug mode enabled, initializing...');
-      initializeTursoRagDebug();
+  // State for controlling the dialog
+  const [isOpen, setIsOpen] = useState(false);
 
+  // Register voice actions on mount
+  useEffect(() => {
+    if (checkDebugEnabled()) {
       // Register functions with voice agent RAG actions
       // This allows the voice agent to open the debug chat programmatically
-      registerRagDebugFunctions({
-        openChat: openChatWithQuery,
-      });
       console.log('[TursoRagDebugButton] Registered RAG debug functions with voice agent');
     } else {
       console.log('[TursoRagDebugButton] Debug mode not enabled. Set VITE_TURSO_RAG_DEBUG=true to enable.');
     }
   }, []);
 
-  // Handle button click - toggle the debug dialog
+  // Handle button click - toggle the dialog
   const handleClick = useCallback(() => {
-    toggleDialog();
-  }, []);
+    setIsOpen((prev) => !prev);
+    console.log('[TursoRagDebugButton] Toggled dialog:', !isOpen);
+  }, [isOpen]);
 
-  // If debug mode is not enabled, don't render the button
+  // If debug mode is not enabled, don't render anything
   if (!checkDebugEnabled()) {
     return null;
   }
@@ -115,45 +113,51 @@ export function TursoRagDebugButton({
   // Full width version for sidebar placement
   if (fullWidth) {
     return (
-      <button
-        onClick={handleClick}
-        className={cn(
-          'flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors w-full text-left',
-          'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-          className
-        )}
-      >
-        <SiTurso className="h-4 w-4 shrink-0" />
-        <span className="truncate">RAG Debug</span>
-      </button>
+      <>
+        <RAGDebugTool isOpen={isOpen} onOpenChange={setIsOpen} showFAB={false} />
+        <button
+          onClick={handleClick}
+          className={cn(
+            'flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors w-full text-left',
+            'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+            className
+          )}
+        >
+          <SiTurso className="h-4 w-4 shrink-0" />
+          <span className="truncate">RAG Debug</span>
+        </button>
+      </>
     );
   }
 
   return (
-    <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={handleClick}
-            className={cn(
-              'relative transition-all duration-200',
-              variantStyles[variant],
-              'hover:scale-105 active:scale-95',
-              sizeClasses[size],
-              className
-            )}
-            aria-label="Open Turso Browser RAG Debug Tool"
-          >
-            <SiTurso size={iconSizes[size]} aria-hidden="true" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="center">
-          <p className="text-xs">Turso Browser RAG Debug</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <>
+      <RAGDebugTool isOpen={isOpen} onOpenChange={setIsOpen} showFAB={false} />
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={handleClick}
+              className={cn(
+                'relative transition-all duration-200',
+                variantStyles[variant],
+                'hover:scale-105 active:scale-95',
+                sizeClasses[size],
+                className
+              )}
+              aria-label="Open Turso Browser RAG Debug Tool"
+            >
+              <SiTurso size={iconSizes[size]} aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="center">
+            <p className="text-xs">Turso Browser RAG Debug</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </>
   );
 }
 
@@ -166,34 +170,33 @@ export function TursoRagDebugSidebarButton({
 }: {
   className?: string;
 }) {
-  // Initialize the Turso RAG debug tool on mount
-  useEffect(() => {
-    if (checkDebugEnabled()) {
-      initializeTursoRagDebug();
-    }
-  }, []);
-
-  const handleClick = useCallback(() => {
-    toggleDialog();
-  }, []);
-
+  const [isOpen, setIsOpen] = useState(false);
   const isEnabled = checkDebugEnabled();
+  
   console.log('[TursoRagDebugSidebarButton] checkDebugEnabled:', isEnabled, 'env:', import.meta.env?.VITE_TURSO_RAG_DEBUG);
+  
   if (!isEnabled) {
     return null;
   }
 
+  const handleClick = () => {
+    setIsOpen((prev) => !prev);
+  };
+
   return (
-    <button
-      onClick={handleClick}
-      className={cn(
-        'flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors w-full text-left rounded-md',
-        'text-foreground hover:bg-accent hover:text-foreground',
-        className
-      )}
-    >
-      <SiTurso className="h-4 w-4 shrink-0 text-primary" />
-      <span className="truncate">RAG Debug</span>
-    </button>
+    <>
+      <RAGDebugTool isOpen={isOpen} onOpenChange={setIsOpen} showFAB={false} />
+      <button
+        onClick={handleClick}
+        className={cn(
+          'flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors w-full text-left rounded-md',
+          'text-foreground hover:bg-accent hover:text-foreground',
+          className
+        )}
+      >
+        <SiTurso className="h-4 w-4 shrink-0 text-primary" />
+        <span className="truncate">RAG Debug</span>
+      </button>
+    </>
   );
 }

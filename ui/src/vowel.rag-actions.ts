@@ -204,7 +204,7 @@ export function registerRAGActions(vowel: Vowel): void {
         const state = getInitializationState();
         const isReady = tursoRAG.isReady();
         const size = isReady ? await tursoRAG.getIndexSize() : 0;
-        const documents = tursoRAG.getDocuments();
+        const documents = await tursoRAG.getDocuments();
 
         return {
           success: true,

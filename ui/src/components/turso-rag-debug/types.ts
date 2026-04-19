@@ -22,6 +22,8 @@ export interface PrebuiltChunk {
   vector?: number[];
   /** 384-dimensional embedding vector @deprecated Use 'vector' instead */
   embedding?: number[];
+  /** Deterministic content hash for cache validation (when present in index YAML) */
+  content_hash?: string;
   /** Metadata about the chunk */
   metadata: {
     /** Document title from frontmatter */
@@ -36,6 +38,8 @@ export interface PrebuiltChunk {
     chunkIndex: number;
     /** Total chunks for this document */
     totalChunks: number;
+    /** Estimated position in document (0-1), when present in index YAML */
+    position?: number;
   };
 }
 
@@ -47,7 +51,11 @@ export interface PrebuiltIndex {
   model: string;
   dimensions: number;
   metric: string;
+  /** Present when the build embeds build metadata */
+  generated_at?: string;
   chunk_count: number;
+  /** Deterministic hash of the whole index when provided by the build */
+  manifest_hash?: string;
   chunks: PrebuiltChunk[];
 }
 
@@ -211,5 +219,5 @@ export interface TursoRAG {
   /** Clear the vector database without reinitializing. Call reload() to reindex. */
   clearIndex(): Promise<void>;
   /** Get all unique documents from the prebuilt index */
-  getDocuments(): DebugDocument[];
+  getDocuments(): Promise<DebugDocument[]>;
 }

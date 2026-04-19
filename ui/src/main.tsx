@@ -18,6 +18,7 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initPluginBridge } from "./plugins/bridge-init";
 import { PluginLauncherProvider } from "./plugins/launchers";
+import { VoiceControlInit } from "./components/VoiceControlInit";
 import {
   getVowel,
   setAppId,
@@ -79,43 +80,21 @@ function VowelRouterSync() {
 }
 
 /**
- * Main app content with Vowel provider.
- * Shows loading state until Vowel client is ready.
- * Handles both environment-based and localStorage-based initialization.
+ * Main app content with optional Vowel provider.
+ * Renders the app immediately; voice is initialized asynchronously (`VowelInit` for env,
+ * `VoiceControlInit` for localStorage). When a client appears, we wrap with `VowelProvider`.
  */
 function AppWithVowel() {
   const [vowel, setVowel] = useState<VowelClientType>(getVowel());
-  const [isReady, setIsReady] = useState(false);
-  const appId = import.meta.env.VITE_VOWEL_APP_ID;
 
   useEffect(() => {
-    // Subscribe to vowel client changes (both env and localStorage init paths)
     const unsubscribe = subscribeToVowelChanges((client) => {
       setVowel(client);
     });
-
-    // Mark as ready after a short delay to ensure we're not racing with initFromStoredConfig
-    const timer = setTimeout(() => setIsReady(true), 50);
-
-    return () => {
-      unsubscribe();
-      clearTimeout(timer);
-    };
+    return unsubscribe;
   }, []);
 
-  // Show loading state until we've determined the vowel client status
-  if (!isReady) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-4">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Initializing voice assistant...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // If no vowel client exists (neither env nor localStorage initialized), render without provider
+  // If no vowel client exists yet, render without provider (voice may load moments later)
   if (!vowel) {
     return (
       <>
@@ -150,6 +129,7 @@ createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           {/* VowelInit runs outside any loading gate - required for context-ready initialization */}
           <VowelInit />
+          <VoiceControlInit />
           <CompanyProvider>
             <EditorAutocompleteProvider>
               <ToastProvider>

@@ -10,7 +10,7 @@
  */
 
 import type { ChatMessage, SearchResult } from './types';
-import { state, debugDialog, getTursoRAGInstance } from './state';
+import { state, debugDialog, getTursoRAGInstance, notifyChatMessageListeners } from './state';
 import { ICONS } from './icons';
 import { escapeHtml, formatTime } from './utils';
 
@@ -89,6 +89,9 @@ export async function addChatMessage(role: ChatMessage['role'], content: string,
   messageEl.innerHTML = html;
   container.appendChild(messageEl);
   container.scrollTop = container.scrollHeight;
+
+  // Notify React listeners
+  notifyChatMessageListeners();
 }
 
 /**
@@ -119,6 +122,7 @@ function groupResultsByFile(results: SearchResult[]): Map<string, SearchResult[]
 
 /**
  * Send a chat message and get RAG results
+ * Legacy version for DOM-based UI (returns void)
  *
  * @param query - User query string
  * @public
@@ -164,6 +168,55 @@ export async function sendChatMessage(query: string): Promise<void> {
 }
 
 /**
+ * Send a chat message and get RAG results
+ * React version that returns a ChatMessage for state management
+ *
+ * @param query - User query string
+ * @returns The assistant's response message
+ * @public
+ */
+export async function sendChatMessageReact(query: string): Promise<ChatMessage> {
+  console.log('[turso-rag-debug] sendChatMessageReact called with query:', query);
+
+  try {
+    const tursoRAG = await getTursoRAGInstance();
+    console.log('[turso-rag-debug] tursoRAG ready:', tursoRAG.isReady());
+
+    if (!tursoRAG.isReady()) {
+      await tursoRAG.initialize();
+    }
+
+    console.log('[turso-rag-debug] Calling search with query:', query);
+    const results = await tursoRAG.search(query, 5);
+    console.log('[turso-rag-debug] Search returned', results.length, 'results');
+
+    if (results.length === 0) {
+      return {
+        role: 'assistant',
+        content: 'No relevant documents found for your query.',
+        timestamp: Date.now(),
+        results: [],
+      };
+    } else {
+      const response = formatSearchResultsForChat(results);
+      return {
+        role: 'assistant',
+        content: response,
+        timestamp: Date.now(),
+        results,
+      };
+    }
+  } catch (error) {
+    console.error('[turso-rag-debug] Chat search failed:', error);
+    return {
+      role: 'assistant',
+      content: `Error: ${error instanceof Error ? error.message : 'Search failed'}`,
+      timestamp: Date.now(),
+    };
+  }
+}
+
+/**
  * Format search results as a chat response
  *
  * @param results - Search results from RAG
@@ -178,4 +231,25 @@ function formatSearchResultsForChat(results: SearchResult[]): string {
   const uniqueCount = uniquePaths.size;
 
   return `Found ${uniqueCount} relevant document${uniqueCount > 1 ? 's' : ''}. Expand items below to see details.`;
+}
+
+/**
+ * Warm up the RAG system with a test query
+ * This ensures the embedding model is loaded and ready
+ *
+ * @public
+ */
+export async function warmUpRAG(): Promise<void> {
+  try {
+    const tursoRAG = await getTursoRAGInstance();
+    if (!tursoRAG.isReady()) {
+      await tursoRAG.initialize();
+    }
+    // Perform a test search to warm up the embedding model
+    await tursoRAG.search('warmup', 1);
+    console.log('[turso-rag-debug] RAG system warmed up successfully');
+  } catch (error) {
+    console.warn('[turso-rag-debug] Warm-up query failed (non-critical):', error);
+    // Non-critical error, don't throw
+  }
 }

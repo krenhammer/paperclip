@@ -14,12 +14,10 @@
  *
  * @example
  * ```typescript
- * import { initializeTursoRagDebug } from './turso-rag-debug';
+ * import { RAGDebugTool } from './turso-rag-debug/react';
  *
- * // Initialize on app mount
- * useEffect(() => {
- *   initializeTursoRagDebug();
- * }, []);
+ * // Use in your React component
+ * <RAGDebugTool />
  * ```
  *
  * @packageDocumentation
@@ -42,17 +40,22 @@ export type {
   TursoRAG,
 } from './types';
 
-// Re-export main initialization function
+// Re-export React components
 export {
-  initializeTursoRagDebug,
-  setDebugEnabled,
-  openDialog,
-  closeDialog,
-  toggleDialog,
-  switchTab,
-  updateStatus,
-  openChatWithQuery,
-} from './ui';
+  RAGDebugTool,
+  RAGDebugDialog,
+  RAGDebugFAB,
+  DocumentsPanel,
+  ChatPanel,
+  StatusBar,
+  ReusableSpinner,
+  type RAGDebugDialogProps,
+  type RAGDebugFABProps,
+  type DocumentsPanelProps,
+  type ChatPanelProps,
+  type StatusBarProps,
+  type ReusableSpinnerProps,
+} from './react';
 
 // Re-export utility functions
 export {
@@ -80,6 +83,8 @@ export {
 export {
   addChatMessage,
   sendChatMessage,
+  sendChatMessageReact,
+  warmUpRAG,
 } from './chat';
 
 // Re-export Turso RAG instance
@@ -89,5 +94,13 @@ export {
   subscribeToInitializationState,
 } from './turso-rag';
 
-// Re-export state (for advanced usage)
-export { state, debugDialog, floatingButton } from './state';
+// Re-export state
+export {
+  state,
+  debugDialog,
+  floatingButton,
+  subscribeToChatMessages,
+  getPrebuiltRAG,
+  markAutoInitStarted,
+  autoInitStarted,
+} from './state';

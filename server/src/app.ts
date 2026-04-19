@@ -63,6 +63,8 @@ const VITE_DEV_ASSET_PREFIXES = [
   "/assets/",
   "/node_modules/",
   "/src/",
+  /** Public copy dir (also served by express.static; exclude from SPA shell if static misses) */
+  "/vowel-rag/",
 ];
 const VITE_DEV_STATIC_PATHS = new Set([
   "/apple-touch-icon.png",
@@ -74,6 +76,17 @@ const VITE_DEV_STATIC_PATHS = new Set([
   "/sw.js",
 ]);
 
+/**
+ * Enables cross-origin isolation so the browser allows `SharedArrayBuffer` and worker
+ * transfers used by Turso `@tursodatabase/database-wasm` (WASI threads). Must match
+ * `ui/vite.config.ts` `server.headers` and `preview.headers` so behavior is the same
+ * when the UI is opened via the Paperclip server (vite-dev or static) vs `pnpm dev` in `ui/`.
+ */
+export const CROSS_ORIGIN_ISOLATION_HEADERS = {
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "credentialless",
+} as const;
+
 export function resolveViteHmrPort(serverPort: number): number {
   if (serverPort <= 55_535) {
     return serverPort + 10_000;
@@ -81,11 +94,27 @@ export function resolveViteHmrPort(serverPort: number): number {
   return Math.max(1_024, serverPort - 10_000);
 }
 
+/**
+ * Whether this GET should receive the Vite-transformed `index.html` SPA shell.
+ *
+ * Must be **false** for JS/CSS/WASM/module requests: the old check used
+ * `req.accepts(["html"]) === "html"`, which matched wildcard `Accept` headers on module scripts,
+ * so Express served HTML for `.js` URLs and the browser reported a MIME error.
+ */
 export function shouldServeViteDevHtml(req: ExpressRequest): boolean {
   const pathname = req.path;
   if (VITE_DEV_STATIC_PATHS.has(pathname)) return false;
   if (VITE_DEV_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return false;
-  return req.accepts(["html"]) === "html";
+  if (/\.(mjs|js|cjs|ts|mts|cts|tsx|jsx|css|wasm|json|map|svg|woff2?)(\?.*)?$/i.test(pathname)) {
+    return false;
+  }
+  const dest = req.headers["sec-fetch-dest"];
+  if (dest === "script" || dest === "style" || dest === "worker" || dest === "image" || dest === "font") {
+    return false;
+  }
+  const accept = req.headers.accept ?? "";
+  if (accept.includes("text/html")) return true;
+  return false;
 }
 
 export function shouldEnablePrivateHostnameGuard(opts: {
@@ -305,6 +334,7 @@ export async function createApp(
           setHeaders(res, filePath) {
             if (path.basename(filePath) === "index.html") {
               res.set("Cache-Control", "no-cache");
+              res.set(CROSS_ORIGIN_ISOLATION_HEADERS);
             }
           },
         }),
@@ -322,8 +352,11 @@ export async function createApp(
         }
         res
           .status(200)
-          .set("Content-Type", "text/html")
-          .set("Cache-Control", "no-cache")
+          .set({
+            "Content-Type": "text/html",
+            "Cache-Control": "no-cache",
+            ...CROSS_ORIGIN_ISOLATION_HEADERS,
+          })
           .end(indexHtml);
       });
     } else {
@@ -366,7 +399,13 @@ export async function createApp(
       }
       try {
         const html = await renderViteHtml.render(req.originalUrl);
-        res.status(200).set({ "Content-Type": "text/html" }).end(html);
+        res
+          .status(200)
+          .set({
+            "Content-Type": "text/html",
+            ...CROSS_ORIGIN_ISOLATION_HEADERS,
+          })
+          .end(html);
       } catch (err) {
         next(err);
       }

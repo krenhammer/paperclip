@@ -449,37 +449,24 @@ export function Layout() {
  * - VowelMicrophoneButton when vowel client is initialized (env or localStorage)
  * - PaperclipVoiceButton when config exists but client not yet ready
  * - Nothing when no config exists
+ *
+ * LocalStorage bootstrap lives in {@link VoiceControlInit} (mounted from `main.tsx`); this FAB only
+ * handles UI when re-enabled.
  */
 function VoiceControlFab() {
   const [hasConfig, setHasConfig] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [vowelReady, setVowelReady] = useState(false);
 
-  // Check for existing config and initialize vowel client on mount
+  // Reflect config + client presence (init from storage is handled by VoiceControlInit)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Check for env-based config
     const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
-    // Check for localStorage-based config
     const localConfig = hasVoiceConfig();
     const configExists = !!envAppId || localConfig;
     setHasConfig(configExists);
 
-    // Initialize vowel client if config exists but client not initialized
-    if (configExists && !getVowel()) {
-      const config = getVoiceConfig();
-      if (config) {
-        console.log("🎤 VoiceControlFab: Initializing from stored config");
-        initFromStoredConfig(config);
-      } else if (envAppId) {
-        console.log("🎤 VoiceControlFab: Initializing from env config");
-        // For env-based config, we need to wait for the app to set it up
-        // The vowel.client should handle env-based init separately
-      }
-    }
-
-    // Check initial vowel state
     setVowelReady(!!getVowel());
     setIsInitialized(true);
   }, []);
@@ -524,31 +511,6 @@ function VoiceControlFab() {
     cleanupVoiceAgent();
   }, []);
 
-  // Listen for storage changes from other tabs
-  useEffect(() => {
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === "paperclip-voice-config") {
-        const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
-        const localConfig = hasVoiceConfig();
-        const configExists = !!envAppId || localConfig;
-        setHasConfig(configExists);
-
-        if (!event.newValue) {
-          cleanupVoiceAgent();
-        } else if (configExists && !getVowel()) {
-          // New config added from another tab - initialize it
-          const config = getVoiceConfig();
-          if (config) {
-            initFromStoredConfig(config);
-          }
-        }
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
-  }, []);
-
   const envAppId = import.meta.env.VITE_VOWEL_APP_ID;
 
   // Don't show until we've checked for config
@@ -574,8 +536,6 @@ function VoiceControlFab() {
           />
         )}
 
-        {/* Turso RAG Debug Button - positioned below Vowel */}
-        <TursoRagDebugButton size="lg" />
       </div>
     </div>
   );

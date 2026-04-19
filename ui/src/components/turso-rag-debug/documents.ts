@@ -33,8 +33,8 @@ export async function getIndexedDocuments(): Promise<DebugDocument[]> {
       await tursoRAG.initialize();
     }
 
-    // Get documents from the index
-    const documents = tursoRAG.getDocuments();
+    // Get documents from the index (now async)
+    const documents = await tursoRAG.getDocuments();
 
     // Get adhoc documents from localStorage
     const adhocDocs = getAdhocDocuments();
@@ -63,11 +63,11 @@ export async function getIndexedDocuments(): Promise<DebugDocument[]> {
 /**
  * Refresh the document tree display
  *
+ * @returns Promise resolving to array of debug documents (for React components)
  * @public
  */
-export async function refreshDocuments(): Promise<void> {
+export async function refreshDocuments(): Promise<DebugDocument[]> {
   const treeContainer = debugDialog?.querySelector('#turso-rag-doc-tree');
-  if (!treeContainer) return;
 
   state.isLoading = true;
 
@@ -75,44 +75,52 @@ export async function refreshDocuments(): Promise<void> {
     const docs = await getIndexedDocuments();
     state.documents = docs;
 
-    if (docs.length === 0) {
+    // Update DOM if container exists (legacy vanilla JS mode)
+    if (treeContainer) {
+      if (docs.length === 0) {
+        treeContainer.innerHTML = `
+          <div class="turso-rag-empty">
+            ${ICONS.database}
+            <p>No documents indexed yet. Click "Refresh" to index documentation.</p>
+          </div>
+        `;
+      } else {
+        // Build folder tree structure
+        const tree = buildFolderTree(docs);
+        treeContainer.innerHTML = renderFolderTree(tree);
+
+        // Add click handlers for expand/collapse
+        treeContainer.querySelectorAll('.turso-rag-folder-name').forEach((el) => {
+          el.addEventListener('click', (e) => {
+            const folder = (e.currentTarget as HTMLElement).closest('.turso-rag-folder');
+            folder?.classList.toggle('expanded');
+          });
+        });
+      }
+    }
+
+    return docs;
+  } catch (error) {
+    console.error('[turso-rag-debug] Failed to refresh documents:', error);
+    if (treeContainer) {
       treeContainer.innerHTML = `
         <div class="turso-rag-empty">
           ${ICONS.database}
-          <p>No documents indexed yet. Click "Refresh" to index documentation.</p>
+          <p>Error loading documents</p>
+          <p style="font-size: 11px; margin-top: 8px;">${error instanceof Error ? error.message : String(error)}</p>
+          <button class="turso-rag-btn" style="margin-top: 12px;" id="turso-rag-retry-load">
+            ${ICONS.refresh} Retry
+          </button>
         </div>
       `;
-    } else {
-      // Build folder tree structure
-      const tree = buildFolderTree(docs);
-      treeContainer.innerHTML = renderFolderTree(tree);
-
-      // Add click handlers for expand/collapse
-      treeContainer.querySelectorAll('.turso-rag-folder-name').forEach((el) => {
-        el.addEventListener('click', (e) => {
-          const folder = (e.currentTarget as HTMLElement).closest('.turso-rag-folder');
-          folder?.classList.toggle('expanded');
-        });
+      treeContainer.querySelector('#turso-rag-retry-load')?.addEventListener('click', () => {
+        void refreshDocuments();
       });
     }
-  } catch (error) {
-    console.error('[turso-rag-debug] Failed to refresh documents:', error);
-    treeContainer.innerHTML = `
-      <div class="turso-rag-empty">
-        ${ICONS.database}
-        <p>Error loading documents</p>
-        <p style="font-size: 11px; margin-top: 8px;">${error instanceof Error ? error.message : String(error)}</p>
-        <button class="turso-rag-btn" style="margin-top: 12px;" id="turso-rag-retry-load">
-          ${ICONS.refresh} Retry
-        </button>
-      </div>
-    `;
-    treeContainer.querySelector('#turso-rag-retry-load')?.addEventListener('click', () => {
-      void refreshDocuments();
-    });
+    return [];
+  } finally {
+    state.isLoading = false;
   }
-
-  state.isLoading = false;
 }
 
 /**

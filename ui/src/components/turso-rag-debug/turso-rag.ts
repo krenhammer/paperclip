@@ -1,43 +1,56 @@
 /**
  * @module turso-rag-debug/turso-rag
  *
- * Turso Browser RAG implementation using @tursodatabase/api.
+ * Browser RAG using **Turso `@tursodatabase/database-wasm`** (same setup as
+ * `docs/.vitepress/theme/prebuilt-rag.ts`): persistent or in-memory libSQL with
+ * vector search over a pre-built YAML index.
  *
- * This module provides a browser-based RAG system using Turso's libSQL
- * with pre-built embeddings loaded from rag-index.yml.
+ * Requires cross-origin isolation (COOP/COEP) — see `ui/vite.config.ts` `server.headers`.
  *
  * @packageDocumentation
  */
 
-import { createClient, type Client } from '@libsql/client';
 import * as yaml from 'js-yaml';
+import { connect, type Database } from '@tursodatabase/database-wasm/vite';
 import type {
-  PrebuiltIndex,
   PrebuiltChunk,
+  PrebuiltIndex,
   SearchResult,
-  DebugDocument,
   InitializationProgress,
+  DebugDocument,
   TursoRAG as TursoRAGInterface,
 } from './types';
+import { getQueryEmbedding } from '../../../public/vowel-rag/query-embeddings';
 
-// Configuration constants
-const DB_CONFIG = {
-  /** IndexedDB database name (used as namespace) */
-  DB_NAME: 'paperclip-turso-rag-v1',
-  /** Vector dimensions (matches all-MiniLM-L6-v2) */
-  DIMENSIONS: 384,
-  /** Distance metric for similarity search */
-  METRIC: 'cosine' as const,
-  /** Prebuilt index URL */
-  INDEX_URL: '/vowel-rag/rag-index.yml',
-  /** Storage key for tracking loaded index */
-  LOADED_KEY: 'paperclip-turso-rag-loaded',
-  /** Default chunks to retrieve per search */
-  DEFAULT_K: 5,
-};
+const LOG_PREFIX = '[turso-rag]';
 
-/** Global initialization state for UI feedback */
-interface InitializationState {
+function log(message: string, ...args: unknown[]): void {
+  console.log(`${LOG_PREFIX}: ${message}`, ...args);
+}
+
+function warn(message: string, ...args: unknown[]): void {
+  console.warn(`${LOG_PREFIX}: ${message}`, ...args);
+}
+
+function errorLog(message: string, ...args: unknown[]): void {
+  console.error(`${LOG_PREFIX}: ${message}`, ...args);
+}
+
+/** Deterministic cache row stored in localStorage (same shape as VowelDocs prebuilt-rag) */
+interface CacheMetadata {
+  dbName: string;
+  manifestHash: string;
+  chunkHashes: Record<string, string>;
+  chunkCount: number;
+  syncedAt: number;
+}
+
+/**
+ * Initialization state mirrored for UI subscribers (matches docs `InitializationState`).
+ *
+ * @public
+ */
+export interface InitializationState {
   isInitializing: boolean;
   progress: number;
   stage: InitializationProgress['stage'];
@@ -47,6 +60,11 @@ interface InitializationState {
   message: string;
 }
 
+// =============================================================================
+// STATE
+// =============================================================================
+
+/** Global initialization state for UI feedback */
 const initializationState: InitializationState = {
   isInitializing: false,
   progress: 0,
@@ -56,6 +74,27 @@ const initializationState: InitializationState = {
   error: null,
   message: 'Not initialized',
 };
+
+/**
+ * Get the current initialization state
+ * @returns Current state (useful for UI progress indicators)
+ * @public
+ */
+export function getInitializationState(): InitializationState {
+  return { ...initializationState };
+}
+
+/**
+ * Subscribe to initialization state changes
+ * @param callback - Called whenever state changes
+ * @returns Unsubscribe function
+ * @public
+ */
+export function subscribeToInitializationState(callback: (state: InitializationState) => void): () => void {
+  const wrappedCallback = () => callback(getInitializationState());
+  stateSubscribers.add(wrappedCallback);
+  return () => stateSubscribers.delete(wrappedCallback);
+}
 
 /** Set of state subscribers */
 const stateSubscribers = new Set<() => void>();
@@ -68,7 +107,7 @@ function notifyStateChange(): void {
     try {
       subscriber();
     } catch (error) {
-      console.warn('[turso-rag] State subscriber error:', error);
+      warn('State subscriber error', error);
     }
   }
 }
@@ -81,24 +120,31 @@ function updateState(updates: Partial<InitializationState>): void {
   notifyStateChange();
 }
 
-/**
- * Get the current initialization state
- */
-export function getInitializationState(): InitializationState {
-  return { ...initializationState };
-}
+// =============================================================================
+// CONFIGURATION
+// =============================================================================
 
-/**
- * Subscribe to initialization state changes
- */
-export function subscribeToInitializationState(callback: (state: InitializationState) => void): () => void {
-  const wrappedCallback = () => callback(getInitializationState());
-  stateSubscribers.add(wrappedCallback);
-  return () => stateSubscribers.delete(wrappedCallback);
-}
+const DB_CONFIG = {
+  /** Distinct from VowelDocs so IndexedDB does not clash when both apps run on localhost */
+  DB_NAME: 'paperclip-turso-rag-v2.db',
+  MEMORY_DB_NAME: ':memory:',
+  CONNECT_TIMEOUT_MS: 4000,
+  CHUNKS_TABLE: 'rag_chunks',
+  /** Vector dimensions (matches Xenova/all-MiniLM-L6-v2) */
+  DIMENSIONS: 384,
+  /** Distance metric for similarity search */
+  METRIC: 'cosine' as const,
+  DEFAULT_K: 5,
+  LOADED_KEY: 'paperclip-turso-rag-loaded',
+  CACHE_META_KEY: 'paperclip-turso-rag-cache-meta',
+  /** Served from `ui/public/vowel-rag/` */
+  INDEX_URL: '/vowel-rag/rag-index.yml',
+};
 
-/** Turso client instance */
-let tursoClient: Client | null = null;
+type TursoDatabase = Database;
+
+let vectorDB: TursoDatabase | null = null;
+let databaseMode: 'persistent' | 'memory' | null = null;
 
 /** Prebuilt index cache */
 let prebuiltIndex: PrebuiltIndex | null = null;
@@ -107,56 +153,123 @@ let prebuiltIndex: PrebuiltIndex | null = null;
 let isInitialized = false;
 let initializationPromise: Promise<void> | null = null;
 
-/**
- * Get or create the Turso client instance.
- * Uses an in-memory database for browser-based RAG.
- */
-async function getTursoClient(): Promise<Client> {
-  if (tursoClient) return tursoClient;
+async function getVectorDB(): Promise<TursoDatabase> {
+  if (vectorDB) return vectorDB;
 
   if (typeof window === 'undefined') {
-    throw new Error('Turso RAG can only be used in browser environment');
+    throw new Error('Prebuilt RAG can only be used in browser environment');
   }
 
-  // Create in-memory Turso client
-  tursoClient = createClient({
-    url: ':memory:',
-  });
+  // if (!window.crossOriginIsolated) {
+  //   throw new Error(
+  //     'Turso Browser RAG requires cross-origin isolation. The Paperclip UI dev server sets Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy in vite.config.ts; production must send the same headers.'
+  //   );
+  // }
 
-  return tursoClient;
+  const openDatabase = async (databaseName: string): Promise<TursoDatabase> => {
+    const db = await connect(databaseName);
+    await ensureSchema(db);
+    return db;
+  };
+
+  try {
+    vectorDB = await Promise.race([
+      openDatabase(DB_CONFIG.DB_NAME),
+      new Promise<TursoDatabase>((_, reject) => {
+        window.setTimeout(() => {
+          reject(new Error(`Timed out opening ${DB_CONFIG.DB_NAME}`));
+        }, DB_CONFIG.CONNECT_TIMEOUT_MS);
+      }),
+    ]);
+    databaseMode = 'persistent';
+  } catch (error) {
+    warn('Falling back to in-memory Turso database', error);
+    vectorDB = await openDatabase(DB_CONFIG.MEMORY_DB_NAME);
+    databaseMode = 'memory';
+  }
+
+  return vectorDB;
 }
 
-/**
- * Initialize the vector search schema in Turso
- */
-async function initSchema(db: Client): Promise<void> {
-  // Create documents table with vector support
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS documents (
+function numberFromSqlValue(value: unknown): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new Error(`Expected numeric SQL value, received ${String(value)}`);
+}
+
+async function ensureSchema(db: TursoDatabase): Promise<void> {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS ${DB_CONFIG.CHUNKS_TABLE} (
       id TEXT PRIMARY KEY,
       text TEXT NOT NULL,
-      vector F32_BLOB(${DB_CONFIG.DIMENSIONS}),
-      metadata TEXT
-    )
+      metadata TEXT NOT NULL,
+      embedding F32_BLOB(${DB_CONFIG.DIMENSIONS}) NOT NULL
+    );
   `);
+}
 
-  // Create vector index for similarity search
+async function getStoredChunkCount(db: TursoDatabase): Promise<number> {
+  const countRow = await db.prepare(`SELECT COUNT(*) AS count FROM ${DB_CONFIG.CHUNKS_TABLE}`).get() as { count?: unknown } | undefined;
+  return countRow?.count === undefined ? 0 : numberFromSqlValue(countRow.count);
+}
+
+async function clearDatabase(db: TursoDatabase): Promise<void> {
+  await db.exec(`DELETE FROM ${DB_CONFIG.CHUNKS_TABLE}`);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: number | undefined;
   try {
-    await db.execute(`
-      CREATE INDEX IF NOT EXISTS idx_documents_vector
-      ON documents (libsql_vector_idx(vector))
-    `);
-  } catch (error) {
-    // Vector index might not be supported in all Turso versions
-    console.warn('[turso-rag] Vector index creation failed (may not be supported):', error);
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
   }
 }
 
+function validateVector(chunk: PrebuiltChunk, vectorData: number[]): void {
+  if (vectorData.length !== DB_CONFIG.DIMENSIONS) {
+    throw new Error(`Chunk ${chunk.id} has vector length ${vectorData.length}; expected ${DB_CONFIG.DIMENSIONS}`);
+  }
+
+  for (let i = 0; i < vectorData.length; i++) {
+    if (!Number.isFinite(vectorData[i])) {
+      throw new Error(`Chunk ${chunk.id} has invalid vector value at index ${i}: ${String(vectorData[i])}`);
+    }
+  }
+}
+
+// =============================================================================
+// PREBUILT INDEX LOADING
+// =============================================================================
+
 /**
- * Fetch the prebuilt index from the server
+ * Fetch the prebuilt index from the server.
+ * This is the YAML artifact generated by build-rag.py.
  */
 async function fetchPrebuiltIndex(): Promise<PrebuiltIndex> {
-  console.log('[turso-rag] Fetching prebuilt index...');
+  log('Fetching prebuilt index');
 
   const response = await fetch(DB_CONFIG.INDEX_URL);
 
@@ -165,7 +278,7 @@ async function fetchPrebuiltIndex(): Promise<PrebuiltIndex> {
   }
 
   const yamlText = await response.text();
-  console.log(`[turso-rag] Fetched ${yamlText.length} bytes`);
+  log(`Fetched ${yamlText.length} bytes`);
 
   if (!yamlText || yamlText.trim().length === 0) {
     throw new Error('Prebuilt index file is empty');
@@ -180,29 +293,36 @@ async function fetchPrebuiltIndex(): Promise<PrebuiltIndex> {
   try {
     index = yaml.load(yamlText);
   } catch (parseError) {
-    console.error('[turso-rag] YAML parse error:', parseError);
+    errorLog('YAML parse error', parseError);
     throw new Error(`Failed to parse prebuilt index YAML: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
   }
 
   if (!index || typeof index !== 'object') {
-    throw new Error('Failed to parse prebuilt index: invalid YAML structure');
+    errorLog('Parsed index is not an object', index);
+    throw new Error('Failed to parse prebuilt index: invalid YAML structure (got ' + typeof index + ')');
   }
 
   const prebuiltIndex = index as PrebuiltIndex;
 
   if (typeof prebuiltIndex.chunk_count !== 'number' || !Array.isArray(prebuiltIndex.chunks)) {
-    throw new Error(`Prebuilt index missing required fields`);
+    errorLog('Index missing required fields', { chunk_count: prebuiltIndex.chunk_count, chunks: typeof prebuiltIndex.chunks });
+    throw new Error(`Prebuilt index missing required fields: chunk_count=${prebuiltIndex.chunk_count}, chunks=${Array.isArray(prebuiltIndex.chunks)}`);
   }
 
-  console.log(`[turso-rag] Loaded prebuilt index: ${prebuiltIndex.chunk_count} chunks, model: ${prebuiltIndex.model}`);
+  log(`Loaded prebuilt index: ${prebuiltIndex.chunk_count} chunks, model: ${prebuiltIndex.model}`);
 
   return prebuiltIndex;
 }
 
-/**
- * Check if the prebuilt index has already been loaded
- */
-function isAlreadyLoaded(): boolean {
+async function ensureDocumentMetadataLoaded(): Promise<void> {
+  if (prebuiltIndex) {
+    return;
+  }
+
+  prebuiltIndex = await fetchPrebuiltIndex();
+}
+
+async function isAlreadyLoaded(db: TursoDatabase): Promise<boolean> {
   try {
     const loaded = localStorage.getItem(DB_CONFIG.LOADED_KEY);
     if (!loaded) return false;
@@ -210,14 +330,96 @@ function isAlreadyLoaded(): boolean {
     const { version, timestamp } = JSON.parse(loaded);
     // Check version match and index is less than 30 days old
     const isRecent = Date.now() - timestamp < 30 * 24 * 60 * 60 * 1000;
-    return version === DB_CONFIG.DB_NAME && isRecent;
+    if (version !== DB_CONFIG.DB_NAME || !isRecent) {
+      return false;
+    }
+
+    return await getStoredChunkCount(db) > 0;
   } catch {
     return false;
   }
 }
 
+function fastHash(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function computeChunkHash(chunk: PrebuiltChunk): string {
+  return chunk.content_hash || fastHash(`${chunk.id}\n${chunk.text}`);
+}
+
+function computeManifestHash(index: PrebuiltIndex): string {
+  if (index.manifest_hash) {
+    return index.manifest_hash;
+  }
+
+  return fastHash([
+    index.version,
+    index.model,
+    String(index.dimensions),
+    index.metric,
+    String(index.chunk_count),
+    ...index.chunks.map((chunk) => `${chunk.id}:${computeChunkHash(chunk)}`),
+  ].join('\n'));
+}
+
+function buildChunkHashes(index: PrebuiltIndex): Record<string, string> {
+  const chunkHashes: Record<string, string> = {};
+  for (const chunk of index.chunks) {
+    chunkHashes[chunk.id] = computeChunkHash(chunk);
+  }
+  return chunkHashes;
+}
+
+function readCacheMeta(): CacheMetadata | null {
+  try {
+    const raw = localStorage.getItem(DB_CONFIG.CACHE_META_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as CacheMetadata;
+  } catch (error) {
+    warn('Failed to read cache metadata', error);
+    return null;
+  }
+}
+
+function writeCacheMeta(meta: CacheMetadata): void {
+  try {
+    localStorage.setItem(DB_CONFIG.CACHE_META_KEY, JSON.stringify(meta));
+  } catch (error) {
+    warn('Failed to write cache metadata', error);
+  }
+}
+
+function clearCacheMeta(): void {
+  try {
+    localStorage.removeItem(DB_CONFIG.CACHE_META_KEY);
+  } catch (error) {
+    warn('Failed to clear cache metadata', error);
+  }
+}
+
+async function hasUsableCachedIndex(db: TursoDatabase, expectedCount: number): Promise<boolean> {
+  if (databaseMode === 'memory') {
+    log('Cache unavailable because Turso is using the in-memory fallback');
+    return false;
+  }
+
+  const storedCount = await getStoredChunkCount(db);
+  if (storedCount !== expectedCount) {
+    log(`Cache count mismatch: stored=${storedCount}, expected=${expectedCount}`);
+    return false;
+  }
+
+  return storedCount > 0;
+}
+
 /**
- * Mark the prebuilt index as loaded in localStorage
+ * Mark the prebuilt index as loaded in localStorage.
  */
 function markAsLoaded(count: number): void {
   try {
@@ -230,30 +432,20 @@ function markAsLoaded(count: number): void {
       })
     );
   } catch (error) {
-    console.warn('[turso-rag] Failed to mark as loaded:', error);
+    warn('Failed to mark index as loaded', error);
   }
 }
 
-/**
- * Convert a vector array to a string format for Turso
- */
-function vectorToString(vector: number[]): string {
-  return `[${vector.join(',')}]`;
-}
-
-/**
- * Load the prebuilt index into Turso
- */
 async function loadPrebuiltIndex(
-  db: Client,
+  db: TursoDatabase,
   index: PrebuiltIndex,
   progressCallback?: (progress: InitializationProgress) => void
 ): Promise<void> {
-  console.log('[turso-rag] Loading prebuilt index into Turso...');
+  log('Loading prebuilt index into Turso');
   const startTime = performance.now();
 
   if (index.chunks.length === 0) {
-    console.warn('[turso-rag] No chunks in prebuilt index');
+    warn('No chunks in prebuilt index');
     updateState({ stage: 'complete', progress: 100, isInitializing: false, message: 'No chunks to load' });
     progressCallback?.({ stage: 'complete', progress: 100, total: 0, processed: 0, message: 'No chunks to load' });
     return;
@@ -261,73 +453,179 @@ async function loadPrebuiltIndex(
 
   updateState({ totalChunks: index.chunks.length, processedChunks: 0, stage: 'indexing', message: `Loading ${index.chunks.length} chunks...` });
 
-  // Clear existing data
-  await db.execute('DELETE FROM documents');
+  const documents = index.chunks.map((chunk, index) => {
+    // Support both new format (vector) and old format (embedding)
+    const vectorData = chunk.vector || chunk.embedding;
+    if (!vectorData) {
+      throw new Error(`Chunk ${chunk.id} has neither 'vector' nor 'embedding' field`);
+    }
+    validateVector(chunk, vectorData);
 
-  // Insert chunks in batches
-  const BATCH_SIZE = 50;
-  const totalBatches = Math.ceil(index.chunks.length / BATCH_SIZE);
+    return {
+      index,
+      id: chunk.id,
+      text: chunk.text,
+      metadata: JSON.stringify(chunk.metadata),
+      vector: JSON.stringify(vectorData),
+    };
+  });
 
-  for (let i = 0; i < index.chunks.length; i += BATCH_SIZE) {
-    const batch = index.chunks.slice(i, i + BATCH_SIZE);
+  const insertChunk = db.prepare(`
+    INSERT INTO ${DB_CONFIG.CHUNKS_TABLE} (id, text, metadata, embedding)
+    VALUES (?, ?, ?, vector32(?))
+  `);
+
+  const BATCH_SIZE = 10;
+  const totalBatches = Math.ceil(documents.length / BATCH_SIZE);
+
+  for (let i = 0; i < documents.length; i += BATCH_SIZE) {
+    const batch = documents.slice(i, i + BATCH_SIZE);
     const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const first = batch[0];
+    const last = batch[batch.length - 1];
+    log(`Starting batch ${batchNum}/${totalBatches}: chunks ${first.index}-${last.index}, ids ${first.id} .. ${last.id}`);
 
-    // Build batch insert
-    const values: (string | number)[] = [];
-    const placeholders: string[] = [];
-
-    for (const chunk of batch) {
-      const vectorData = chunk.vector || chunk.embedding;
-      if (!vectorData) continue;
-
-      placeholders.push('(?, ?, vector32(?), ?)');
-      values.push(
-        chunk.id,
-        chunk.text,
-        vectorToString(vectorData),
-        JSON.stringify(chunk.metadata)
+    for (const document of batch) {
+      log(`Inserting chunk ${document.index}: ${document.id}`);
+      await withTimeout(
+        insertChunk.run(document.id, document.text, document.metadata, document.vector),
+        10000,
+        `Insert chunk ${document.index} (${document.id})`,
       );
     }
 
-    if (placeholders.length > 0) {
-      const sql = `INSERT INTO documents (id, text, vector, metadata) VALUES ${placeholders.join(', ')}`;
-      await db.execute({ sql, args: values });
-    }
-
-    const processed = Math.min(i + batch.length, index.chunks.length);
-    const progress = Math.round((processed / index.chunks.length) * 100);
+    const processed = Math.min(i + batch.length, documents.length);
+    const progress = Math.round((processed / documents.length) * 100);
 
     updateState({ processedChunks: processed, progress, message: `Loading batch ${batchNum}/${totalBatches}...` });
 
     const message = `Loading batch ${batchNum}/${totalBatches} (${batch.length} chunks)`;
-    console.log(`[turso-rag] ${message}`);
+    log(message);
 
     progressCallback?.({
       stage: 'indexing',
       progress,
-      total: index.chunks.length,
+      total: documents.length,
       processed,
       message,
     });
   }
 
   const duration = Math.round(performance.now() - startTime);
-  console.log(`[turso-rag] Index loaded: ${index.chunks.length} chunks in ${duration}ms`);
+  log(`Index loaded: ${documents.length} chunks in ${duration}ms`);
 
-  updateState({ stage: 'complete', progress: 100, isInitializing: false, message: `Loaded ${index.chunks.length} chunks` });
+  updateState({ stage: 'complete', progress: 100, isInitializing: false, message: `Loaded ${documents.length} chunks` });
   progressCallback?.({
     stage: 'complete',
     progress: 100,
-    total: index.chunks.length,
-    processed: index.chunks.length,
-    message: `Loaded ${index.chunks.length} chunks in ${duration}ms`,
+    total: documents.length,
+    processed: documents.length,
+    message: `Loaded ${documents.length} chunks in ${duration}ms`,
   });
 
-  markAsLoaded(index.chunks.length);
+  markAsLoaded(documents.length);
 }
 
+async function incrementalSync(
+  db: TursoDatabase,
+  index: PrebuiltIndex,
+  cachedMeta: CacheMetadata,
+  progressCallback?: (progress: InitializationProgress) => void
+): Promise<void> {
+  log('Starting incremental sync');
+  const startTime = performance.now();
+  const remoteHashes = buildChunkHashes(index);
+  const localHashes = cachedMeta.chunkHashes || {};
+
+  const toDelete = Object.keys(localHashes).filter((id) => !(id in remoteHashes));
+  const toUpsert = index.chunks.filter((chunk) => remoteHashes[chunk.id] !== localHashes[chunk.id]);
+  const totalWork = toDelete.length + toUpsert.length;
+
+  if (totalWork === 0) {
+    log('No incremental changes detected; cache metadata is already current');
+    updateState({ stage: 'complete', progress: 100, isInitializing: false, message: 'Cache up to date' });
+    progressCallback?.({ stage: 'complete', progress: 100, total: index.chunk_count, processed: index.chunk_count, message: 'Cache up to date' });
+    return;
+  }
+
+  log(`Incremental sync: ${toDelete.length} deletions, ${toUpsert.length} upserts`);
+  updateState({
+    totalChunks: index.chunk_count,
+    processedChunks: 0,
+    stage: 'indexing',
+    message: `Syncing ${toDelete.length} deletions and ${toUpsert.length} upserts`,
+  });
+
+  let processed = 0;
+  const deleteChunk = db.prepare(`DELETE FROM ${DB_CONFIG.CHUNKS_TABLE} WHERE id = ?`);
+  const upsertChunk = db.prepare(`
+    INSERT OR REPLACE INTO ${DB_CONFIG.CHUNKS_TABLE} (id, text, metadata, embedding)
+    VALUES (?, ?, ?, vector32(?))
+  `);
+
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
+    const batch = toDelete.slice(i, i + BATCH_SIZE);
+    const deleteBatch = db.transaction(async (ids: string[]) => {
+      for (const id of ids) {
+        await deleteChunk.run(id);
+      }
+    });
+    await deleteBatch(batch);
+    processed += batch.length;
+    const progress = Math.round((processed / totalWork) * 100);
+    updateState({ processedChunks: processed, progress, message: `Deleting stale chunks (${processed}/${totalWork})...` });
+    progressCallback?.({ stage: 'indexing', progress, total: totalWork, processed, message: `Deleting stale chunks (${processed}/${totalWork})...` });
+  }
+
+  const upsertBatch = db.transaction(async (batch: PrebuiltChunk[]) => {
+    for (const chunk of batch) {
+      const vectorData = chunk.vector || chunk.embedding;
+      if (!vectorData) {
+        throw new Error(`Chunk ${chunk.id} has neither 'vector' nor 'embedding' field`);
+      }
+      await upsertChunk.run(
+        chunk.id,
+        chunk.text,
+        JSON.stringify(chunk.metadata),
+        JSON.stringify(vectorData),
+      );
+    }
+  });
+
+  for (let i = 0; i < toUpsert.length; i += BATCH_SIZE) {
+    const batch = toUpsert.slice(i, i + BATCH_SIZE);
+    await upsertBatch(batch);
+    processed += batch.length;
+    const progress = Math.round((processed / totalWork) * 100);
+    updateState({ processedChunks: processed, progress, message: `Upserting chunks (${processed}/${totalWork})...` });
+    progressCallback?.({ stage: 'indexing', progress, total: totalWork, processed, message: `Upserting chunks (${processed}/${totalWork})...` });
+  }
+
+  const duration = Math.round(performance.now() - startTime);
+  log(`Incremental sync complete: ${toDelete.length} deleted, ${toUpsert.length} upserted in ${duration}ms`);
+  updateState({ stage: 'complete', progress: 100, isInitializing: false, message: `Synced ${toUpsert.length} chunks in ${duration}ms` });
+  progressCallback?.({
+    stage: 'complete',
+    progress: 100,
+    total: index.chunk_count,
+    processed: index.chunk_count,
+    message: `Synced ${toUpsert.length} chunks in ${duration}ms`,
+  });
+}
+
+// =============================================================================
+// PUBLIC API
+// =============================================================================
+
 /**
- * Initialize the Turso RAG system
+ * Initialize the Prebuilt RAG system.
+ * This is called automatically on first use and will:
+ * 1. Initialize the VectorDB (with embedding model for queries)
+ * 2. Load the prebuilt index (if not already loaded)
+ *
+ * @param progressCallback - Optional callback for progress updates
+ * @returns Promise that resolves when initialization is complete
  */
 async function initialize(progressCallback?: (progress: InitializationProgress) => void): Promise<void> {
   if (isInitialized) {
@@ -340,8 +638,8 @@ async function initialize(progressCallback?: (progress: InitializationProgress) 
     });
     return;
   }
-
   if (initializationPromise) {
+    // If already initializing, just subscribe to state changes
     const unsubscribe = subscribeToInitializationState((state) => {
       if (state.stage !== 'complete' && state.stage !== 'error') {
         progressCallback?.({
@@ -353,6 +651,7 @@ async function initialize(progressCallback?: (progress: InitializationProgress) 
         });
       }
     });
+    // Unsubscribe when initialization completes
     await initializationPromise;
     unsubscribe();
     return initializationPromise;
@@ -369,56 +668,133 @@ async function initialize(progressCallback?: (progress: InitializationProgress) 
 
   initializationPromise = (async () => {
     try {
-      console.log('[turso-rag] Initializing Turso RAG system...');
+      log('Initializing Prebuilt RAG system');
 
-      updateState({ stage: 'loading', progress: 10, message: 'Initializing Turso client...' });
-      progressCallback?.({ stage: 'loading', progress: 10, total: 0, processed: 0, message: 'Initializing Turso client...' });
+      const loadingMsg = 'Opening Turso Browser RAG database...';
+      updateState({ stage: 'loading', progress: 10, message: loadingMsg });
+      progressCallback?.({
+        stage: 'loading',
+        progress: 10,
+        total: 0,
+        processed: 0,
+        message: loadingMsg,
+      });
 
-      const db = await getTursoClient();
+      const db = await getVectorDB();
 
-      updateState({ stage: 'loading', progress: 20, message: 'Setting up schema...' });
-      progressCallback?.({ stage: 'loading', progress: 20, total: 0, processed: 0, message: 'Setting up schema...' });
+      const checkingMsg = databaseMode === 'memory'
+        ? 'Using in-memory Turso fallback, checking cache...'
+        : 'Turso database initialized, checking cache...';
+      updateState({ stage: 'loading', progress: 20, message: checkingMsg });
+      progressCallback?.({
+        stage: 'loading',
+        progress: 20,
+        total: 0,
+        processed: 0,
+        message: checkingMsg,
+      });
 
-      await initSchema(db);
+      const fetchingMsg = 'Fetching prebuilt index...';
+      updateState({ stage: 'fetching', progress: 30, message: fetchingMsg });
+      progressCallback?.({
+        stage: 'fetching',
+        progress: 30,
+        total: 0,
+        processed: 0,
+        message: fetchingMsg,
+      });
 
-      // Check if we need to load the prebuilt index
-      if (!isAlreadyLoaded() || prebuiltIndex === null) {
-        console.log('[turso-rag] Loading prebuilt index...');
+      const index = await fetchPrebuiltIndex();
+      prebuiltIndex = index;
+      const manifestHash = computeManifestHash(index);
+      const cachedMeta = readCacheMeta();
+      log(`Manifest hash ${manifestHash}; chunks=${index.chunk_count}; dbMode=${databaseMode ?? 'unknown'}`);
 
-        updateState({ stage: 'fetching', progress: 30, message: 'Fetching prebuilt index...' });
-        progressCallback?.({ stage: 'fetching', progress: 30, total: 0, processed: 0, message: 'Fetching prebuilt index...' });
-
-        // Fetch the prebuilt index
-        const index = await fetchPrebuiltIndex();
-        prebuiltIndex = index;
-
-        updateState({ totalChunks: index.chunk_count, stage: 'loading', progress: 50, message: `Fetched ${index.chunk_count} chunks...` });
-        progressCallback?.({ stage: 'loading', progress: 50, total: index.chunk_count, processed: 0, message: `Fetched ${index.chunk_count} chunks...` });
-
-        // Load the prebuilt chunks with their embeddings
-        await loadPrebuiltIndex(db, index, progressCallback);
-      } else {
-        const stats = JSON.parse(localStorage.getItem(DB_CONFIG.LOADED_KEY) || '{}');
-        const count = stats.count || 'unknown';
-        console.log(`[turso-rag] Using existing index with ${count} chunks`);
-
-        // Still need to load prebuiltIndex for getDocuments() to work
-        if (prebuiltIndex === null) {
-          prebuiltIndex = await fetchPrebuiltIndex();
-        }
-
-        const cachedMsg = `Using cached index (${count} chunks)`;
+      if (
+        cachedMeta &&
+        cachedMeta.dbName === DB_CONFIG.DB_NAME &&
+        cachedMeta.manifestHash === manifestHash &&
+        await hasUsableCachedIndex(db, index.chunk_count)
+      ) {
+        const cachedMsg = `Using cached index (${index.chunk_count} chunks)`;
+        log(cachedMsg);
         updateState({ stage: 'complete', progress: 100, isInitializing: false, message: cachedMsg });
-        progressCallback?.({ stage: 'complete', progress: 100, total: typeof count === 'number' ? count : 0, processed: typeof count === 'number' ? count : 0, message: cachedMsg });
+        progressCallback?.({
+          stage: 'complete',
+          progress: 100,
+          total: index.chunk_count,
+          processed: index.chunk_count,
+          message: cachedMsg,
+        });
+        isInitialized = true;
+        log('Initialization complete (cache hit)');
+        return;
       }
 
+      if (
+        cachedMeta &&
+        cachedMeta.dbName === DB_CONFIG.DB_NAME &&
+        Object.keys(cachedMeta.chunkHashes || {}).length > 0 &&
+        databaseMode !== 'memory'
+      ) {
+        const syncMsg = 'Manifest changed, performing incremental sync...';
+        log(syncMsg);
+        updateState({ stage: 'loading', progress: 40, message: syncMsg });
+        progressCallback?.({
+          stage: 'loading',
+          progress: 40,
+          total: index.chunk_count,
+          processed: 0,
+          message: syncMsg,
+        });
+
+        await incrementalSync(db, index, cachedMeta, progressCallback);
+        writeCacheMeta({
+          dbName: DB_CONFIG.DB_NAME,
+          manifestHash,
+          chunkHashes: buildChunkHashes(index),
+          chunkCount: index.chunk_count,
+          syncedAt: Date.now(),
+        });
+        markAsLoaded(index.chunk_count);
+        isInitialized = true;
+        log('Initialization complete (incremental sync)');
+        return;
+      }
+
+      const fetchedMsg = `Fetched ${index.chunk_count} chunks, clearing existing data...`;
+      updateState({ totalChunks: index.chunk_count, stage: 'loading', progress: 50, message: fetchedMsg });
+      progressCallback?.({
+        stage: 'loading',
+        progress: 50,
+        total: index.chunk_count,
+        processed: 0,
+        message: fetchedMsg,
+      });
+
+      await clearDatabase(db);
+      await loadPrebuiltIndex(db, index, progressCallback);
+      writeCacheMeta({
+        dbName: DB_CONFIG.DB_NAME,
+        manifestHash,
+        chunkHashes: buildChunkHashes(index),
+        chunkCount: index.chunk_count,
+        syncedAt: Date.now(),
+      });
+
       isInitialized = true;
-      console.log('[turso-rag] Initialization complete');
+      log('Initialization complete (full load)');
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error('[turso-rag] Initialization failed:', error);
+      errorLog('Initialization failed', error);
       updateState({ stage: 'error', isInitializing: false, error: errorMsg, message: `Error: ${errorMsg}` });
-      progressCallback?.({ stage: 'error', progress: 0, total: 0, processed: 0, message: `Error: ${errorMsg}` });
+      progressCallback?.({
+        stage: 'error',
+        progress: 0,
+        total: 0,
+        processed: 0,
+        message: `Error: ${errorMsg}`,
+      });
       throw error;
     } finally {
       initializationPromise = null;
@@ -429,138 +805,143 @@ async function initialize(progressCallback?: (progress: InitializationProgress) 
 }
 
 /**
- * Search the documentation for relevant chunks
+ * Search the documentation for relevant chunks.
+ * Returns the top-k most semantically similar chunks to the query.
+ *
+ * @param query - The search query text
+ * @param k - Number of results to return (default: 5)
+ * @returns Array of search results with similarity scores
  */
 async function search(query: string, k: number = DB_CONFIG.DEFAULT_K): Promise<SearchResult[]> {
-  console.log('[turso-rag] search() called with query:', query, 'k:', k);
-
+  log(`search() called with query="${query}", k=${k}`);
   if (!isInitialized) {
     await initialize();
   }
 
-  const db = await getTursoClient();
+  const db = await getVectorDB();
+  const queryEmbedding = await getQueryEmbedding(query);
+  log('Executing vector search');
 
-  // For now, use a simple text-based search since vector similarity
-  // might not be available in all Turso builds
-  // We'll use the query-embeddings.ts module to get embeddings and then search
-  const { getQueryEmbedding } = await import('../../../public/vowel-rag/query-embeddings');
+  const results = await db.prepare(`
+    SELECT
+      text,
+      metadata,
+      vector_distance_cos(embedding, vector32(?)) AS distance
+    FROM ${DB_CONFIG.CHUNKS_TABLE}
+    ORDER BY distance ASC
+    LIMIT ?
+  `).all(JSON.stringify(queryEmbedding), k) as Array<{
+    text: unknown;
+    metadata: unknown;
+    distance: unknown;
+  }>;
 
-  try {
-    const queryVector = await getQueryEmbedding(query);
-    const vectorStr = vectorToString(queryVector);
+  return results.map((result) => {
+    const distance = numberFromSqlValue(result.distance);
+    const metadata = JSON.parse(String(result.metadata)) as PrebuiltChunk['metadata'];
 
-    // Try vector distance search first
-    const results = await db.execute({
-      sql: `
-        SELECT id, text, metadata,
-               vector_distance_cos(vector, vector32(?)) as score
-        FROM documents
-        ORDER BY score
-        LIMIT ?
-      `,
-      args: [vectorStr, k],
-    });
-
-    return results.rows.map((row: Record<string, unknown>) => ({
-      text: String(row.text),
-      score: Number(row.score),
-      metadata: JSON.parse(String(row.metadata)),
-    }));
-  } catch (error) {
-    console.warn('[turso-rag] Vector search failed, falling back to text search:', error);
-
-    // Fallback: simple text search with LIKE
-    const fallbackResults = await db.execute({
-      sql: `
-        SELECT id, text, metadata, 0.5 as score
-        FROM documents
-        WHERE text LIKE ?
-        LIMIT ?
-      `,
-      args: [`%${query}%`, k],
-    });
-
-    return fallbackResults.rows.map((row: Record<string, unknown>) => ({
-      text: String(row.text),
-      score: Number(row.score),
-      metadata: JSON.parse(String(row.metadata)),
-    }));
-  }
+    return {
+      text: String(result.text ?? ''),
+      score: Math.max(0, Math.min(1, 1 - distance)),
+      metadata,
+    };
+  });
 }
 
 /**
- * Check if the RAG system is initialized and ready
+ * Check if the RAG system is initialized and ready.
+ * @returns true if ready to accept searches
  */
 function checkReady(): boolean {
   return isInitialized;
 }
 
 /**
- * Get the total number of indexed chunks
+ * Get the total number of indexed chunks.
+ * @returns Promise resolving to the index size
  */
 async function getIndexSize(): Promise<number> {
   if (!isInitialized) {
     await initialize();
   }
-  const db = await getTursoClient();
-  const result = await db.execute('SELECT COUNT(*) as count FROM documents');
-  return Number(result.rows[0]?.count || 0);
+  const db = await getVectorDB();
+  return await getStoredChunkCount(db);
 }
 
 /**
- * Force reload the prebuilt index
+ * Force reload the prebuilt index.
+ * Use this after updating documentation.
  */
 async function reload(progressCallback?: (progress: InitializationProgress) => void): Promise<void> {
-  console.log('[turso-rag] Starting reload...');
+  log('Starting reload');
   isInitialized = false;
   prebuiltIndex = null;
   updateState({ isInitializing: true, stage: 'fetching', progress: 0, error: null, message: 'Reloading index...' });
 
   try {
     localStorage.removeItem(DB_CONFIG.LOADED_KEY);
-    const db = await getTursoClient();
-    await db.execute('DELETE FROM documents');
+    clearCacheMeta();
+    const db = await getVectorDB();
+    await clearDatabase(db);
     await initialize(progressCallback);
-    console.log('[turso-rag] Reload complete');
+    log('Reload complete');
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error('[turso-rag] Reload failed:', error);
+    errorLog('Reload failed', error);
     updateState({ stage: 'error', isInitializing: false, error: errorMsg, message: `Error: ${errorMsg}` });
     throw error;
   }
 }
 
 /**
- * Clear the vector database without reinitializing
+ * Clear the vector database without reinitializing.
+ * Use this when you want to clear the index but not reload immediately.
+ * Call reload() afterwards to reindex.
  */
 async function clearIndex(): Promise<void> {
-  console.log('[turso-rag] Clearing index...');
+  log('Clearing index');
   isInitialized = false;
   prebuiltIndex = null;
-
+  
   try {
     localStorage.removeItem(DB_CONFIG.LOADED_KEY);
-    const db = await getTursoClient();
-    await db.execute('DELETE FROM documents');
+    clearCacheMeta();
+    const db = await getVectorDB();
+    await clearDatabase(db);
     updateState({ isInitializing: false, stage: 'complete', progress: 0, error: null, message: 'Index cleared' });
-    console.log('[turso-rag] Index cleared');
+    log('Index cleared');
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error('[turso-rag] Clear failed:', error);
+    errorLog('Clear failed', error);
     updateState({ stage: 'error', isInitializing: false, error: errorMsg, message: `Error: ${errorMsg}` });
     throw error;
   }
 }
 
 /**
- * Get all unique documents from the prebuilt index
+ * Get the prebuilt index (for document listing).
+ * Returns null if not loaded yet.
  */
-function getDocuments(): DebugDocument[] {
+function getPrebuiltIndex(): PrebuiltIndex | null {
+  return prebuiltIndex;
+}
+
+/**
+ * Get all unique documents from the prebuilt index (YAML metadata).
+ * Fetches YAML if not yet in memory so the debug UI can list paths before full DB init.
+ *
+ * @public
+ */
+async function getDocuments(): Promise<DebugDocument[]> {
   if (!prebuiltIndex) {
-    return [];
+    try {
+      prebuiltIndex = await fetchPrebuiltIndex();
+    } catch (error) {
+      errorLog('Failed to fetch prebuilt index for getDocuments', error);
+      return [];
+    }
   }
 
-  // Group chunks by document path
   const docMap = new Map<string, { title: string; path: string; category: string; totalChunks: number }>();
 
   for (const chunk of prebuiltIndex.chunks) {
@@ -571,8 +952,7 @@ function getDocuments(): DebugDocument[] {
     }
   }
 
-  // Convert to array
-  const documents = Array.from(docMap.values()).map(doc => ({
+  const documents: DebugDocument[] = Array.from(docMap.values()).map((doc) => ({
     id: doc.path,
     title: doc.title,
     path: doc.path,
@@ -584,9 +964,12 @@ function getDocuments(): DebugDocument[] {
   return documents.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+// =============================================================================
+// EXPORT
+// =============================================================================
+
 /**
- * Turso RAG instance for Paperclip.
- * Provides semantic search over documentation using Turso's in-browser vector search.
+ * Turso WASM RAG instance for Paperclip (same engine as VowelDocs `prebuiltRAG`).
  */
 export const tursoRAG: TursoRAGInterface = {
   initialize,
