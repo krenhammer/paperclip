@@ -38,8 +38,9 @@ import {
   showClearDatabaseConfirmModal,
   getIndexedDocuments
 } from '../documents';
-import { sendChatMessageReact, warmUpRAG } from '../chat';
+import { sendChatMessageReact, warmUpRAG, formatSearchResultsForChat } from '../chat';
 import { checkDebugEnabled } from '../utils';
+import { registerRagDebugFunctions } from '@/vowel.rag-actions';
 
 /**
  * Status type for the status bar
@@ -245,13 +246,6 @@ export function RAGDebugTool({
   }, []);
 
   /**
-   * Handle tab change
-   */
-  const handleTabChange = useCallback((value: string) => {
-    setActiveTab(value as 'documents' | 'chat');
-  }, []);
-
-  /**
    * Handle refresh documents
    */
   const handleRefreshDocuments = useCallback(async () => {
@@ -290,6 +284,85 @@ export function RAGDebugTool({
     showClearDatabaseConfirmModal();
   }, []);
 
+  /**
+   * Voice agent + RAG debug: mirror `searchKnowledgeBase` / `openRagDebugChat` into this UI.
+   */
+  useEffect(() => {
+    registerRagDebugFunctions({
+      openChat: (initialQuery, results) => {
+        setIsOpen(true);
+        setActiveTab('chat');
+        const ts = Date.now();
+        if (initialQuery) {
+          setChatMessages((prev) => {
+            const next: ChatMessage[] = [...prev];
+            next.push({ role: 'user', content: initialQuery, timestamp: ts });
+            if (results && results.length > 0) {
+              next.push({
+                role: 'assistant',
+                content: formatSearchResultsForChat(results),
+                timestamp: ts + 1,
+                results,
+              });
+            }
+            return next;
+          });
+        }
+      },
+      appendVoiceKnowledgeSearch: (query, results, error) => {
+        setIsOpen(true);
+        setActiveTab('chat');
+        const ts = Date.now();
+        setChatMessages((prev) => {
+          const userLine: ChatMessage = {
+            role: 'user',
+            content: `[searchKnowledgeBase] ${query}`,
+            timestamp: ts,
+          };
+          if (error) {
+            return [
+              ...prev,
+              userLine,
+              { role: 'assistant', content: `Error: ${error}`, timestamp: ts + 1 },
+            ];
+          }
+          if (results.length === 0) {
+            return [
+              ...prev,
+              userLine,
+              {
+                role: 'assistant',
+                content: 'No relevant documents found for your query.',
+                timestamp: ts + 1,
+                results: [],
+              },
+            ];
+          }
+          return [
+            ...prev,
+            userLine,
+            {
+              role: 'assistant',
+              content: formatSearchResultsForChat(results),
+              timestamp: ts + 1,
+              results,
+            },
+          ];
+        });
+      },
+    });
+    return () => {
+      registerRagDebugFunctions({
+        openChat: () => {
+          /* unmounted */
+        },
+        appendVoiceKnowledgeSearch: () => {
+          /* unmounted */
+        },
+      });
+    };
+  }, []);
+
   const handleSendMessage = useCallback(async (message: string) => {
     const userMessage: ChatMessage = {
       role: 'user',
@@ -324,9 +397,9 @@ export function RAGDebugTool({
   }, []);
 
   /**
-   * Check if FAB should be disabled
+   * FAB stays clickable while loading (amber state); only hard errors disable it.
    */
-  const isFABDisabled = statusType === 'error' || (statusType === 'loading' && progress < 100);
+  const isFABDisabled = statusType === 'error';
 
   return (
     <>
@@ -385,7 +458,17 @@ export function RAGDebugTool({
         }
 
         .rag-debug-fab.loading {
-          cursor: wait;
+          cursor: pointer;
+        }
+
+        /* Amber chrome while index/embeddings are still loading (FAB remains clickable) */
+        .rag-debug-fab.warming {
+          background: linear-gradient(135deg, #ca8a04 0%, #eab308 100%) !important;
+          box-shadow: 0 4px 14px rgba(234, 179, 8, 0.45);
+        }
+
+        .rag-debug-fab.warming:hover:not(:disabled) {
+          box-shadow: 0 6px 20px rgba(234, 179, 8, 0.55);
         }
 
         /* Dialog — position (bottom/right) set inline; default anchors lower-right */
@@ -407,6 +490,7 @@ export function RAGDebugTool({
           border: 1px solid #e4e4e7;
           font-family: system-ui, -apple-system, sans-serif;
           font-size: 14px;
+          pointer-events: auto;
         }
 
         html.dark .rag-debug-dialog,
@@ -1152,6 +1236,7 @@ export function RAGDebugTool({
       {showFAB && (
         <RAGDebugFAB
           isLoading={statusType === 'loading'}
+          isWarming={statusType === 'loading'}
           progress={progress}
           disabled={isFABDisabled}
           onClick={handleFABClick}
@@ -1161,6 +1246,8 @@ export function RAGDebugTool({
       <RAGDebugDialog
         open={isOpen}
         onOpenChange={handleOpenChange}
+        activeTab={activeTab}
+        onActiveTabChange={setActiveTab}
         statusMessage={statusMessage}
         statusType={statusType}
         progress={progress}

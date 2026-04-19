@@ -22,6 +22,10 @@ import { StatusBar } from './StatusBar';
 export interface RAGDebugDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Active tab (controlled) */
+  activeTab: 'documents' | 'chat';
+  /** Tab change from user interaction */
+  onActiveTabChange: (tab: 'documents' | 'chat') => void;
   children: {
     documentsPanel: React.ReactNode;
     chatPanel: React.ReactNode;
@@ -36,7 +40,7 @@ export interface RAGDebugDialogProps {
  * Draggable dialog component for the RAG debug tool.
  *
  * Features:
- * - Radix Dialog primitive for accessibility
+ * - Radix Dialog with `modal={false}` so the rest of the app stays clickable (debug HUD)
  * - Radix Tabs primitive for Documents/Chat switching
  * - Draggable header for repositioning
  * - Fixed positioning at bottom-right of viewport (draggable)
@@ -58,6 +62,8 @@ export interface RAGDebugDialogProps {
 export function RAGDebugDialog({
   open,
   onOpenChange,
+  activeTab,
+  onActiveTabChange,
   children,
   statusMessage,
   statusType,
@@ -130,7 +136,7 @@ export function RAGDebugDialog({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={onOpenChange} modal={false}>
       <Dialog.Portal>
         <Dialog.Content
           ref={dialogRef}
@@ -142,6 +148,7 @@ export function RAGDebugDialog({
             top: 'auto',
           }}
           onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+          onEscapeKeyDown={(e: Event) => e.preventDefault()}
         >
           {/* Header - Draggable */}
           <div
@@ -174,7 +181,11 @@ export function RAGDebugDialog({
             </Dialog.Close>
           </div>
 
-          <Tabs.Root defaultValue="documents" className="rag-debug-tabs">
+          <Tabs.Root
+            value={activeTab}
+            onValueChange={(v) => onActiveTabChange(v as 'documents' | 'chat')}
+            className="rag-debug-tabs"
+          >
             <Tabs.List className="rag-debug-tabs-list" aria-label="RAG Debug Tools">
               <Tabs.Trigger
                 value="documents"

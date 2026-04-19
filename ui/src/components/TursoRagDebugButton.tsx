@@ -9,7 +9,8 @@
  * @module components/TursoRagDebugButton
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
+import { Loader2 } from 'lucide-react';
 import { SiTurso } from 'react-icons/si';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,9 +20,9 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { useTursoRagVoiceGate } from '@/lib/turso-rag-voice-gate';
 import { RAGDebugTool } from './turso-rag-debug/react';
 import { checkDebugEnabled } from './turso-rag-debug';
-import { registerRagDebugFunctions } from '@/vowel.rag-actions';
 
 /**
  * Props for the TursoRagDebugButton component
@@ -87,17 +88,8 @@ export function TursoRagDebugButton({
 }: TursoRagDebugButtonProps) {
   // State for controlling the dialog
   const [isOpen, setIsOpen] = useState(false);
-
-  // Register voice actions on mount
-  useEffect(() => {
-    if (checkDebugEnabled()) {
-      // Register functions with voice agent RAG actions
-      // This allows the voice agent to open the debug chat programmatically
-      console.log('[TursoRagDebugButton] Registered RAG debug functions with voice agent');
-    } else {
-      console.log('[TursoRagDebugButton] Debug mode not enabled. Set VITE_TURSO_RAG_DEBUG=true to enable.');
-    }
-  }, []);
+  const ragGate = useTursoRagVoiceGate();
+  const ragWarming = (ragGate.loading || !ragGate.ready) && !ragGate.error;
 
   // Handle button click - toggle the dialog
   const handleClick = useCallback(() => {
@@ -116,14 +108,21 @@ export function TursoRagDebugButton({
       <>
         <RAGDebugTool isOpen={isOpen} onOpenChange={setIsOpen} showFAB={false} />
         <button
+          type="button"
           onClick={handleClick}
           className={cn(
-            'flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors w-full text-left',
+            'flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors w-full text-left rounded-md',
             'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+            ragWarming &&
+              'ring-2 ring-amber-400/70 ring-offset-2 ring-offset-background bg-amber-500/10 text-amber-950 dark:text-amber-100',
             className
           )}
         >
-          <SiTurso className="h-4 w-4 shrink-0" />
+          {ragWarming ? (
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-600 dark:text-amber-400" aria-hidden />
+          ) : (
+            <SiTurso className="h-4 w-4 shrink-0" />
+          )}
           <span className="truncate">RAG Debug</span>
         </button>
       </>
@@ -144,16 +143,34 @@ export function TursoRagDebugButton({
                 'relative transition-all duration-200',
                 variantStyles[variant],
                 'hover:scale-105 active:scale-95',
+                ragWarming &&
+                  'ring-2 ring-amber-400/80 ring-offset-2 ring-offset-background border-amber-400/50',
                 sizeClasses[size],
                 className
               )}
-              aria-label="Open Turso Browser RAG Debug Tool"
+              aria-label={
+                ragWarming
+                  ? 'Turso RAG loading — click to open debug panel'
+                  : 'Open Turso Browser RAG Debug Tool'
+              }
             >
-              <SiTurso size={iconSizes[size]} aria-hidden="true" />
+              {ragWarming ? (
+                <Loader2
+                  size={iconSizes[size]}
+                  className="animate-spin text-amber-600 dark:text-amber-400"
+                  aria-hidden="true"
+                />
+              ) : (
+                <SiTurso size={iconSizes[size]} aria-hidden="true" />
+              )}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="center">
-            <p className="text-xs">Turso Browser RAG Debug</p>
+            <p className="text-xs">
+              {ragWarming
+                ? `Loading RAG… ${Math.round(ragGate.progress)}% — click to open`
+                : 'Turso Browser RAG Debug'}
+            </p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -172,9 +189,9 @@ export function TursoRagDebugSidebarButton({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const isEnabled = checkDebugEnabled();
-  
-  console.log('[TursoRagDebugSidebarButton] checkDebugEnabled:', isEnabled, 'env:', import.meta.env?.VITE_TURSO_RAG_DEBUG);
-  
+  const ragGate = useTursoRagVoiceGate();
+  const ragWarming = (ragGate.loading || !ragGate.ready) && !ragGate.error;
+
   if (!isEnabled) {
     return null;
   }
@@ -187,14 +204,21 @@ export function TursoRagDebugSidebarButton({
     <>
       <RAGDebugTool isOpen={isOpen} onOpenChange={setIsOpen} showFAB={false} />
       <button
+        type="button"
         onClick={handleClick}
         className={cn(
           'flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors w-full text-left rounded-md',
           'text-foreground hover:bg-accent hover:text-foreground',
+          ragWarming &&
+            'ring-2 ring-amber-400/70 ring-offset-2 ring-offset-background bg-amber-500/10',
           className
         )}
       >
-        <SiTurso className="h-4 w-4 shrink-0 text-primary" />
+        {ragWarming ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-600 dark:text-amber-400" aria-hidden />
+        ) : (
+          <SiTurso className="h-4 w-4 shrink-0 text-primary" />
+        )}
         <span className="truncate">RAG Debug</span>
       </button>
     </>

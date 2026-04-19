@@ -21,6 +21,8 @@ import { ReusableSpinner } from './ReusableSpinner';
 export interface RAGDebugFABProps {
   /** Whether the button is in a loading state */
   isLoading: boolean;
+  /** Amber “still initializing” styling; FAB stays clickable */
+  isWarming?: boolean;
   /** Loading progress percentage (0-100) */
   progress: number;
   /** Whether the button is disabled */
@@ -54,28 +56,34 @@ export interface RAGDebugFABProps {
  */
 export function RAGDebugFAB({
   isLoading,
+  isWarming = false,
   progress,
   disabled,
   onClick,
 }: RAGDebugFABProps): React.ReactElement {
   const handleClick = (): void => {
-    if (!disabled && !isLoading) {
+    if (!disabled) {
       onClick();
     }
   };
 
   const buttonTitle = isLoading
-    ? `Loading Turso Browser RAG... ${Math.round(progress)}%`
+    ? `Loading Turso Browser RAG... ${Math.round(progress)}% (click to open)`
     : 'Open Turso Browser RAG Debug Tool';
+
+  const fabClass =
+    `rag-debug-fab${isLoading ? ' loading' : ''}` +
+    `${isWarming ? ' warming' : ''}` +
+    `${disabled ? ' disabled' : ''}`;
 
   return (
     <button
-      className={`rag-debug-fab${isLoading ? ' loading' : ''}${disabled ? ' disabled' : ''}`}
+      className={fabClass}
       onClick={handleClick}
-      disabled={disabled || isLoading}
+      disabled={disabled}
       title={buttonTitle}
       aria-label={buttonTitle}
-      aria-disabled={disabled || isLoading}
+      aria-disabled={disabled}
       type="button"
     >
       {isLoading ? (

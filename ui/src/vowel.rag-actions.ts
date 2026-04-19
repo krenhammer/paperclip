@@ -20,16 +20,29 @@ import type { SearchResult } from "./components/turso-rag-debug/types";
 let ragDebugState: {
   isOpen: boolean;
   openChat?: (initialQuery?: string, results?: SearchResult[]) => void;
+  appendVoiceKnowledgeSearch?: (
+    query: string,
+    results: SearchResult[],
+    error?: string,
+  ) => void;
 } = { isOpen: false };
 
 /**
  * Register RAG debug UI functions
- * Called by the TursoRagDebug component when mounted
+ * Called by {@link RAGDebugTool} when mounted
  */
 export function registerRagDebugFunctions(functions: {
   openChat: (initialQuery?: string, results?: SearchResult[]) => void;
+  /** Mirrors each `searchKnowledgeBase` voice tool call into the debug Chat tab */
+  appendVoiceKnowledgeSearch?: (
+    query: string,
+    results: SearchResult[],
+    error?: string,
+  ) => void;
 }): void {
   ragDebugState.openChat = functions.openChat;
+  ragDebugState.appendVoiceKnowledgeSearch =
+    functions.appendVoiceKnowledgeSearch;
 }
 
 /**
@@ -79,14 +92,14 @@ async function searchKnowledgeBase(
 export function registerRAGActions(vowel: Vowel): void {
   /**
    * Search the Paperclip knowledge base for documentation and information.
-   * Use this when the user asks questions about how Paperclip works,
-   * its features, idioms, or any documentation-related queries.
+   * Use when the user asks what Paperclip is or does, how it works, or any
+   * documentation-style question — always prefer this over guessing from general knowledge.
    */
   vowel.registerAction(
     "searchKnowledgeBase",
     {
       description:
-        "Search the Paperclip documentation knowledge base for relevant information. Use this when users ask questions about how Paperclip works, its features, idioms, or documentation. Returns relevant documentation chunks with source paths.",
+        "Search the Paperclip documentation knowledge base. REQUIRED when the user asks what Paperclip is, what it does, how it works, or any product/documentation question — call this before answering; do not rely on general knowledge alone. Also use for features, idioms, and how-to questions. Returns relevant documentation chunks with source paths.",
       parameters: {
         query: {
           type: "string",
@@ -116,6 +129,8 @@ export function registerRAGActions(vowel: Vowel): void {
 
         console.log(`[RAG] Found ${results.length} results`);
 
+        ragDebugState.appendVoiceKnowledgeSearch?.(query, results);
+
         return {
           success: true,
           query,
@@ -132,6 +147,7 @@ export function registerRAGActions(vowel: Vowel): void {
         const errorMsg =
           error instanceof Error ? error.message : String(error);
         console.error("[RAG] Search failed:", error);
+        ragDebugState.appendVoiceKnowledgeSearch?.(query, [], errorMsg);
         return {
           success: false,
           error: errorMsg,

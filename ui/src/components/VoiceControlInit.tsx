@@ -50,8 +50,9 @@ export function VoiceControlInit() {
       tryInitFromStoredConfig();
     };
 
+    /** DOM timers use numeric handles in browsers (avoid NodeJS.Timeout vs number conflicts). */
     let idleId: number | undefined;
-    let timeoutId: ReturnType<typeof window.setTimeout> | undefined;
+    let timeoutId: number | undefined;
 
     if (typeof window.requestIdleCallback === "function") {
       idleId = window.requestIdleCallback(run, { timeout: 3000 });

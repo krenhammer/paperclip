@@ -217,13 +217,13 @@ export async function sendChatMessageReact(query: string): Promise<ChatMessage> 
 }
 
 /**
- * Format search results as a chat response
+ * Short summary line for assistant messages that include expandable result cards.
  *
  * @param results - Search results from RAG
- * @returns Formatted response string
- * @internal
+ * @returns One-line summary for the chat bubble
+ * @public
  */
-function formatSearchResultsForChat(results: SearchResult[]): string {
+export function formatSearchResultsForChat(results: SearchResult[]): string {
   if (results.length === 0) return 'No results found.';
 
   // Group by file to count unique documents

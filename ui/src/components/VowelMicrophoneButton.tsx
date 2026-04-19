@@ -10,6 +10,7 @@
 import { useVowel } from "@vowel.to/client/react";
 import { Mic, MicOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useTursoRagVoiceGate } from "@/lib/turso-rag-voice-gate";
 import {
   Tooltip,
   TooltipContent,
@@ -49,6 +50,11 @@ export function VowelMicrophoneButton({
   showStatus = false,
 }: VowelMicrophoneButtonProps) {
   const { state, toggleSession } = useVowel();
+  const ragGate = useTursoRagVoiceGate();
+
+  /** Voice session is blocked until local Turso RAG + embeddings are ready (see turso-rag-voice-gate). */
+  const ragBlocksVoice =
+    ragGate.loading || !ragGate.ready || Boolean(ragGate.error);
 
   const sizeClasses = {
     sm: "h-8 w-8",
@@ -66,6 +72,12 @@ export function VowelMicrophoneButton({
    * Get the tooltip text based on current state
    */
   const getTooltipText = () => {
+    if (ragGate.error) {
+      return `Knowledge base unavailable: ${ragGate.error}`;
+    }
+    if (ragGate.loading || !ragGate.ready) {
+      return `Loading knowledge base… ${Math.round(ragGate.progress)}%`;
+    }
     if (state.isConnecting) return "Connecting to voice assistant...";
     if (state.isConnected) {
       if (state.isUserSpeaking) return "Listening... (click to stop)";
@@ -79,6 +91,7 @@ export function VowelMicrophoneButton({
    * Get the status text for display
    */
   const getStatusText = () => {
+    if (ragGate.loading || !ragGate.ready) return "Loading KB…";
     if (state.isConnecting) return "Connecting...";
     if (state.isConnected) {
       if (state.isUserSpeaking) return "Listening...";
@@ -96,6 +109,9 @@ export function VowelMicrophoneButton({
     return "outline";
   };
 
+  const showRagSpinner = ragBlocksVoice && !ragGate.error;
+  const sessionBusy = state.isConnecting || ragBlocksVoice;
+
   return (
     <TooltipProvider delayDuration={300}>
       <Tooltip>
@@ -104,18 +120,25 @@ export function VowelMicrophoneButton({
             variant={getButtonVariant()}
             size={showStatus ? "default" : "icon"}
             onClick={toggleSession}
-            disabled={state.isConnecting}
+            disabled={sessionBusy}
             className={cn(
               "relative transition-all duration-200",
               state.isConnected && "bg-primary text-primary-foreground hover:bg-primary/90",
               state.isUserSpeaking && "ring-2 ring-green-500 ring-offset-2",
               state.isAISpeaking && "ring-2 ring-blue-500 ring-offset-2",
+              ragBlocksVoice && "opacity-80",
               !showStatus && sizeClasses[size],
               className,
             )}
             aria-label={getTooltipText()}
           >
             {state.isConnecting ? (
+              <Loader2
+                size={iconSizes[size]}
+                className="animate-spin"
+                aria-hidden="true"
+              />
+            ) : showRagSpinner ? (
               <Loader2
                 size={iconSizes[size]}
                 className="animate-spin"

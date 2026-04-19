@@ -85,6 +85,7 @@ export {
   sendChatMessage,
   sendChatMessageReact,
   warmUpRAG,
+  formatSearchResultsForChat,
 } from './chat';
 
 // Re-export Turso RAG instance
